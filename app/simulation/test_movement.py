@@ -114,6 +114,12 @@ def run_movement_test():
     last_fps_update = time.time()
     fps = 0
     prev_jump = False
+    bullet_path = None
+    bullet_timer = 0
+    BULLET_LIFETIME = 15  # frames
+    damage_text = None
+    damage_timer = 0
+    DAMAGE_LIFETIME = 30  # frames
     
     while running:
         # preview time step for elevation check
@@ -122,13 +128,78 @@ def run_movement_test():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            elif event.type == pygame.MOUSEBUTTONDOWN:
                 mx, my = event.pos
-                # Convert screen to world coords
                 wx = mx / scale
                 wy = (screen_height - my) / scale
-                ai_waypoints = [(wx, wy)]
-                current_patrol_point = 0
+                if event.button == 1:
+                    # Left click: shoot
+                    px, py, pz = player.location
+                    # Fire from player's head
+                    shooter_z = pz + player.height
+                    dx = wx - px
+                    dy = wy - py
+                    dz = game_map.get_elevation_at_position(wx, wy) + ai_player.height - shooter_z
+                    dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                    if dist == 0:
+                        continue
+                    # Add aim spread based on aim_rating (lower = more spread)
+                    aim_spread = max(1.0 - player.aim_rating / 100.0, 0.01) * 0.1  # radians
+                    spread_angle = random.uniform(-aim_spread, aim_spread)
+                    cos_a = math.cos(spread_angle)
+                    sin_a = math.sin(spread_angle)
+                    dx, dy = dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
+                    norm = math.sqrt(dx*dx + dy*dy + dz*dz)
+                    dx /= norm
+                    dy /= norm
+                    dz /= norm
+                    # Raycast: step along the direction until collision
+                    step = 0.05
+                    t = 0.0
+                    hit = False
+                    max_range = 50.0
+                    hit_damage = 0
+                    while t < max_range:
+                        bx = px + dx * t
+                        by = py + dy * t
+                        bz = shooter_z + dz * t
+                        # Check collision with walls/objects (ignore areas)
+                        collided = False
+                        for wall in game_map.walls.values():
+                            if wall.collides_with_circle(bx, by, player.radius, bz, is_3d_check=True):
+                                collided = True
+                                break
+                        for obj in game_map.objects.values():
+                            if obj.collides_with_circle(bx, by, player.radius, bz, is_3d_check=True):
+                                collided = True
+                                break
+                        # Check collision with AI player (3D)
+                        aix, aiy, aiz = ai_player.location
+                        ai_head = aiz + ai_player.height
+                        ai_feet = aiz
+                        ai_radius = ai_player.radius
+                        # 3D distance to capsule (cylinder)
+                        dx_ai = bx - aix
+                        dy_ai = by - aiy
+                        dz_ai = bz - max(min(bz, ai_head), ai_feet)
+                        dist_xy = math.hypot(dx_ai, dy_ai)
+                        if dist_xy < ai_radius and ai_feet <= bz <= ai_head:
+                            collided = True
+                            hit = True
+                            hit_damage = 40  # base damage
+                            ai_player.health -= hit_damage
+                            damage_text = (hit_damage, (aix, aiy, ai_head))
+                            damage_timer = DAMAGE_LIFETIME
+                            break
+                        if collided:
+                            break
+                        t += step
+                    bullet_path = ((px, py), (bx, by))
+                    bullet_timer = BULLET_LIFETIME
+                elif event.button == 3:
+                    # Right click: set AI waypoint
+                    ai_waypoints = [(wx, wy)]
+                    current_patrol_point = 0
         
         # Get keyboard input for player movement
         keys = pygame.key.get_pressed()
@@ -407,6 +478,29 @@ def run_movement_test():
             5,
             1
         )
+        
+        # Draw bullet path if active
+        if bullet_path and bullet_timer > 0:
+            start, end = bullet_path
+            pygame.draw.line(
+                screen, (255, 0, 0),
+                (int(start[0] * scale), int(screen_height - start[1] * scale)),
+                (int(end[0] * scale), int(screen_height - end[1] * scale)), 3
+            )
+            bullet_timer -= 1
+            if bullet_timer <= 0:
+                bullet_path = None
+        # Draw damage text if active
+        if damage_text and damage_timer > 0:
+            dmg, (x, y, z) = damage_text
+            font = pygame.font.SysFont(None, 32)
+            dmg_surface = font.render(f"-{dmg}", True, (255, 0, 0))
+            sx = int(x * scale)
+            sy = int(screen_height - y * scale - z * scale - 30)
+            screen.blit(dmg_surface, (sx - dmg_surface.get_width() // 2, sy))
+            damage_timer -= 1
+            if damage_timer <= 0:
+                damage_text = None
         
         # Calculate and display FPS
         frame_count += 1
