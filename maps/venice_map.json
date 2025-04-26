@@ -1,0 +1,533 @@
+{
+    "name": "Futuristic City Map",
+    "theme": "Venice",
+    "attacker_spawns": [
+        [
+            10.0,
+            50.0
+        ]
+    ],
+    "defender_spawns": [
+        [
+            90.0,
+            50.0
+        ]
+    ],
+    "plant_sites": {
+        "A": {
+            "center": [
+                75.0,
+                30.0
+            ],
+            "radius": 12.0,
+            "name": "A Site"
+        },
+        "B": {
+            "center": [
+                75.0,
+                70.0
+            ],
+            "radius": 12.0,
+            "name": "B Site"
+        }
+    },
+    "walls": [
+        {
+            "start": [
+                0,
+                0
+            ],
+            "end": [
+                100.0,
+                0
+            ]
+        },
+        {
+            "start": [
+                100.0,
+                0
+            ],
+            "end": [
+                100.0,
+                100.0
+            ]
+        },
+        {
+            "start": [
+                100.0,
+                100.0
+            ],
+            "end": [
+                0,
+                100.0
+            ]
+        },
+        {
+            "start": [
+                0,
+                100.0
+            ],
+            "end": [
+                0,
+                0
+            ]
+        },
+        {
+            "start": [
+                40.0,
+                40.0
+            ],
+            "end": [
+                40.0,
+                0.0
+            ]
+        },
+        {
+            "start": [
+                40.0,
+                60.0
+            ],
+            "end": [
+                40.0,
+                100.0
+            ]
+        },
+        {
+            "start": [
+                55.00000000000001,
+                40.0
+            ],
+            "end": [
+                55.00000000000001,
+                60.0
+            ]
+        },
+        {
+            "start": [
+                70.0,
+                20.0
+            ],
+            "end": [
+                90.0,
+                20.0
+            ]
+        },
+        {
+            "start": [
+                70.0,
+                40.0
+            ],
+            "end": [
+                90.0,
+                40.0
+            ]
+        },
+        {
+            "start": [
+                70.0,
+                60.0
+            ],
+            "end": [
+                90.0,
+                60.0
+            ]
+        },
+        {
+            "start": [
+                70.0,
+                80.0
+            ],
+            "end": [
+                90.0,
+                80.0
+            ]
+        },
+        {
+            "start": [
+                35.0,
+                25.0
+            ],
+            "end": [
+                45.0,
+                25.0
+            ]
+        },
+        {
+            "start": [
+                35.0,
+                35.0
+            ],
+            "end": [
+                45.0,
+                35.0
+            ]
+        },
+        {
+            "start": [
+                35.0,
+                65.0
+            ],
+            "end": [
+                45.0,
+                65.0
+            ]
+        },
+        {
+            "start": [
+                35.0,
+                75.0
+            ],
+            "end": [
+                45.0,
+                75.0
+            ]
+        }
+    ],
+    "decorative_elements": [],
+    "zones": {
+        "Attacker Spawn": {
+            "type": "spawn",
+            "center": [
+                10.0,
+                50.0
+            ],
+            "neighbors": [
+                "A Lobby",
+                "Mid Entrance",
+                "B Lobby"
+            ],
+            "elevation": 0,
+            "cover_objects": [],
+            "one_way_connections": []
+        },
+        "Defender Spawn": {
+            "type": "spawn",
+            "center": [
+                90.0,
+                50.0
+            ],
+            "neighbors": [
+                "A Site",
+                "B Site"
+            ],
+            "elevation": 0,
+            "cover_objects": [],
+            "one_way_connections": []
+        },
+        "A Site": {
+            "type": "site",
+            "center": [
+                75.0,
+                30.0
+            ],
+            "neighbors": [
+                "A Main",
+                "A Link",
+                "Defender Spawn",
+                "A Heaven"
+            ],
+            "elevation": 0,
+            "cover_objects": [
+                {
+                    "type": "box",
+                    "position": [
+                        70.0,
+                        27.0
+                    ],
+                    "size": [
+                        3,
+                        3
+                    ]
+                },
+                {
+                    "type": "box",
+                    "position": [
+                        78.0,
+                        34.0
+                    ],
+                    "size": [
+                        4,
+                        2
+                    ]
+                },
+                {
+                    "type": "wall_gap",
+                    "position": [
+                        73.0,
+                        35.0
+                    ],
+                    "size": [
+                        1,
+                        4
+                    ]
+                }
+            ],
+            "one_way_connections": []
+        },
+        "B Site": {
+            "type": "site",
+            "center": [
+                75.0,
+                70.0
+            ],
+            "neighbors": [
+                "B Main",
+                "B Link",
+                "Defender Spawn",
+                "B Cubby"
+            ],
+            "elevation": 0,
+            "cover_objects": [
+                {
+                    "type": "crate",
+                    "position": [
+                        72.0,
+                        74.0
+                    ],
+                    "size": [
+                        4,
+                        4
+                    ]
+                },
+                {
+                    "type": "wall_corner",
+                    "position": [
+                        80.0,
+                        68.0
+                    ],
+                    "size": [
+                        3,
+                        3
+                    ]
+                }
+            ],
+            "one_way_connections": []
+        },
+        "A Main": {
+            "type": "choke",
+            "center": [
+                60.0,
+                30.0
+            ],
+            "neighbors": [
+                "A Lobby",
+                "A Site",
+                "A Link"
+            ],
+            "elevation": 0,
+            "cover_objects": [
+                {
+                    "type": "box",
+                    "position": [
+                        60.0,
+                        28.0
+                    ],
+                    "size": [
+                        3,
+                        2
+                    ]
+                }
+            ],
+            "one_way_connections": []
+        },
+        "B Main": {
+            "type": "choke",
+            "center": [
+                60.0,
+                70.0
+            ],
+            "neighbors": [
+                "B Lobby",
+                "B Site",
+                "B Link",
+                "B Cubby"
+            ],
+            "elevation": 0,
+            "cover_objects": [
+                {
+                    "type": "box",
+                    "position": [
+                        60.0,
+                        72.0
+                    ],
+                    "size": [
+                        3,
+                        2
+                    ]
+                }
+            ],
+            "one_way_connections": []
+        },
+        "Mid": {
+            "type": "mid",
+            "center": [
+                50.0,
+                50.0
+            ],
+            "neighbors": [
+                "Mid Entrance",
+                "A Link",
+                "B Link"
+            ],
+            "elevation": 0,
+            "cover_objects": [
+                {
+                    "type": "box",
+                    "position": [
+                        50.0,
+                        47.0
+                    ],
+                    "size": [
+                        2,
+                        2
+                    ]
+                },
+                {
+                    "type": "column",
+                    "position": [
+                        53.0,
+                        53.0
+                    ],
+                    "size": [
+                        1,
+                        1
+                    ]
+                }
+            ],
+            "one_way_connections": []
+        },
+        "A Link": {
+            "type": "connector",
+            "center": [
+                65.0,
+                40.0
+            ],
+            "neighbors": [
+                "A Main",
+                "Mid",
+                "A Site"
+            ],
+            "elevation": 0,
+            "cover_objects": [],
+            "one_way_connections": []
+        },
+        "B Link": {
+            "type": "connector",
+            "center": [
+                65.0,
+                60.0
+            ],
+            "neighbors": [
+                "Mid",
+                "B Site",
+                "B Main"
+            ],
+            "elevation": 0,
+            "cover_objects": [],
+            "one_way_connections": []
+        },
+        "A Lobby": {
+            "type": "connector",
+            "center": [
+                30.0,
+                30.0
+            ],
+            "neighbors": [
+                "Attacker Spawn",
+                "A Main"
+            ],
+            "elevation": 0,
+            "cover_objects": [],
+            "one_way_connections": []
+        },
+        "B Lobby": {
+            "type": "connector",
+            "center": [
+                30.0,
+                70.0
+            ],
+            "neighbors": [
+                "Attacker Spawn",
+                "B Main"
+            ],
+            "elevation": 0,
+            "cover_objects": [],
+            "one_way_connections": []
+        },
+        "Mid Entrance": {
+            "type": "choke",
+            "center": [
+                30.0,
+                50.0
+            ],
+            "neighbors": [
+                "Attacker Spawn",
+                "Mid"
+            ],
+            "elevation": 0,
+            "cover_objects": [],
+            "one_way_connections": []
+        },
+        "A Heaven": {
+            "type": "heaven",
+            "center": [
+                80.0,
+                35.0
+            ],
+            "neighbors": [
+                "A Site"
+            ],
+            "elevation": 1,
+            "cover_objects": [],
+            "one_way_connections": [
+                "A Site"
+            ]
+        },
+        "B Cubby": {
+            "type": "cubby",
+            "center": [
+                70.0,
+                65.0
+            ],
+            "neighbors": [
+                "B Site",
+                "B Main"
+            ],
+            "elevation": 0,
+            "cover_objects": [],
+            "one_way_connections": []
+        }
+    },
+    "default_plant_spots": {
+        "A": [
+            [
+                71.0,
+                30.0
+            ],
+            [
+                78.0,
+                27.0
+            ]
+        ],
+        "B": [
+            [
+                73.0,
+                68.0
+            ],
+            [
+                79.0,
+                70.0
+            ]
+        ]
+    },
+    "orbs": [
+        [
+            50.0,
+            42.0
+        ],
+        [
+            50.0,
+            58.0
+        ]
+    ]
+}
