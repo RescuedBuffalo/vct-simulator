@@ -559,6 +559,30 @@ class Player:
             self.deaths += 1
         return damage
 
+    def reset_ability_charges(self):
+        """Reset all ability charges to max (should be called at round start)."""
+        if hasattr(self, 'abilities') and hasattr(self.abilities, 'reset_charges'):
+            self.abilities.reset_charges()
+        else:
+            # Fallback: reset utility_charges to some default if available
+            for k in self.utility_charges:
+                self.utility_charges[k] = 1  # or set to max if known
+
+    def increment_ult_points(self, amount: int = 1, max_ult: int = 7):
+        """Increment ult points, up to a max (default 7)."""
+        self.ult_points = min(self.ult_points + amount, max_ult)
+
+    def spend_ult_point(self, amount: int = 1):
+        """Spend ult points if available."""
+        if self.ult_points >= amount:
+            self.ult_points -= amount
+            return True
+        return False
+
+    def add_orb_pickup(self, max_ult: int = 7):
+        """Handle orb pickup (increment ult points)."""
+        self.increment_ult_points(1, max_ult)
+
 def map_orm_player_to_sim_player(orm_player: 'OrmPlayer') -> Player:
     """
     Convert a SQLAlchemy Player model into the simulation Player dataclass.

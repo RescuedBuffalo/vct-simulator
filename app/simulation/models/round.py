@@ -127,6 +127,8 @@ class Round:
         attacker_blackboard: Blackboard = None,
         defender_blackboard: Blackboard = None,
         seed: Optional[int] = None,
+        loss_bonus_attackers: int = 1900,
+        loss_bonus_defenders: int = 1900,
     ):
         self.round_number = round_number
         self.players = players
@@ -183,6 +185,9 @@ class Round:
         
         # Initialize round strategies for both teams
         self._set_initial_strategies()
+        
+        self.loss_bonus_attackers = loss_bonus_attackers
+        self.loss_bonus_defenders = loss_bonus_defenders
     
     def _update_alive_players_in_blackboards(self) -> None:
         """Update the blackboards with currently alive players."""
@@ -1679,3 +1684,59 @@ class Round:
                     "ability",
                     {"type": "trap_trigger", "ability": trap.definition.name}
                 )
+
+    def get_carryover_state(self, loss_bonus_attackers: int = None, loss_bonus_defenders: int = None) -> Dict:
+        """
+        Return a summary of what each player carries to the next round,
+        and the credits they should receive (win/loss, spike, kills, etc).
+        Accepts optional loss bonus values for attackers and defenders.
+        """
+        carryover = {}
+        winner = self.round_winner
+        loser = RoundWinner.ATTACKERS if winner == RoundWinner.DEFENDERS else RoundWinner.DEFENDERS
+
+        WIN_CREDITS = 3000
+        # Use passed-in loss bonus if provided, else use self.loss_bonus_* values
+        LOSS_CREDITS_ATTACKERS = loss_bonus_attackers if loss_bonus_attackers is not None else self.loss_bonus_attackers
+        LOSS_CREDITS_DEFENDERS = loss_bonus_defenders if loss_bonus_defenders is not None else self.loss_bonus_defenders
+        SPIKE_PLANT_CREDITS = 300
+        SPIKE_DEFUSE_CREDITS = 300
+        KILL_CREDITS = 200
+
+        for pid, player in self.players.items():
+            carryover[pid] = {
+                "alive": player.alive,
+                "weapon": player.weapon if player.alive else None,
+                "shield": player.shield if player.alive else None,
+                "creds": player.creds,
+                "agent": player.agent,
+                "team": "attackers" if pid in self.attacker_ids else "defenders",
+                "kills": player.kills,
+                "deaths": player.deaths,
+                "plants": player.plants,
+                "defuses": player.defuses,
+                "abilities": player.abilities,  # or a summary of ability charges
+            }
+
+        for pid, state in carryover.items():
+            player = self.players[pid]
+            # Base win/loss
+            if (winner == RoundWinner.ATTACKERS and pid in self.attacker_ids) or \
+               (winner == RoundWinner.DEFENDERS and pid in self.defender_ids):
+                state["round_credits"] = WIN_CREDITS
+            else:
+                if pid in self.attacker_ids:
+                    state["round_credits"] = LOSS_CREDITS_ATTACKERS
+                else:
+                    state["round_credits"] = LOSS_CREDITS_DEFENDERS
+
+            # Spike plant/defuse bonuses
+            if player.plants > 0:
+                state["round_credits"] += SPIKE_PLANT_CREDITS
+            if player.defuses > 0:
+                state["round_credits"] += SPIKE_DEFUSE_CREDITS
+
+            # Kill rewards
+            state["round_credits"] += player.kills * KILL_CREDITS
+
+        return carryover

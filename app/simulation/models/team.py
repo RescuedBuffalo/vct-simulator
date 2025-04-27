@@ -141,4 +141,16 @@ class Team:
     
     def get_players_by_role(self, role: str) -> List[Player]:
         """Get all players with a specific role."""
-        return [p for p in self.players if p.role == role] 
+        return [p for p in self.players if p.role == role]
+    
+    def reset_abilities_and_ultimates(self, max_ult: int = 7):
+        """Reset all player ability charges and ult points at round start."""
+        for player in self.players:
+            player.reset_ability_charges()
+            player.ult_points = min(player.ult_points, max_ult)  # Optionally cap ult points
+
+    def increment_player_ult(self, player_id: str, amount: int = 1, max_ult: int = 7):
+        """Increment ult points for a player (e.g., orb pickup or round event)."""
+        player = self.get_player_by_id(player_id)
+        if player:
+            player.increment_ult_points(amount, max_ult) 
