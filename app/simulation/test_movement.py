@@ -12,7 +12,7 @@ from typing import List, Tuple, Optional
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from app.simulation.models.player import Player
-from app.simulation.models.map import Map, MapBoundary
+from app.simulation.models.map import Map, MapBoundary, RampBoundary, StairsBoundary
 
 def create_test_map():
     """Create a simple test map with walls, elevations, and ramps for collision testing."""
@@ -25,7 +25,7 @@ def create_test_map():
     game_map.areas["room-2"] = MapBoundary(27, 10, 3, 6, "area", "room-2")
     
     # Add an elevated area
-    game_map.areas["heaven"] = MapBoundary(18, 10, 6, 6, "area", "heaven", elevation=1, z=3.0)
+    game_map.areas["heaven"] = MapBoundary(18, 10, 6, 6, "area", "heaven", z=0, height_z=3.0, elevation=3)
     
     # Add walls around the main area
     game_map.walls["wall-left"] = MapBoundary(4, 5, 1, 22, "wall", "wall-left", z=0, height_z=3.0)
@@ -39,167 +39,29 @@ def create_test_map():
     game_map.objects["box-3"] = MapBoundary(15, 18, 1, 1, "object", "box-3", z=0, height_z=0.5)
     
     # Add ramps for elevation changes (lead into heaven area)
-    game_map.ramps["ramp-to-heaven"] = MapBoundary(17, 16, 2, 4, "ramp", "ramp-to-heaven", z=0, height_z=3.0)
-    game_map.ramps["ramp-to-heaven"].direction = "south"  # Ramp goes from north down to heaven area at y=16
+    game_map.ramps["ramp-to-heaven"] = RampBoundary(
+        "ramp-to-heaven",
+        18, 16, 2, 4,
+        0,      # base elevation z
+        3.0,    # height_z
+        "south"
+    )  # Ramp goes from south up to the heaven area at y=16
     
     # Add stairs leading into heaven area
     # Position stairs along the eastern edge of heaven (y=12..16, x=22..24)
-    game_map.stairs["stairs-1"] = MapBoundary(22, 12, 2, 4, "stairs", "stairs-1", z=0, height_z=3.0)
+    game_map.stairs["stairs-1"] = StairsBoundary(
+        "stairs-1",
+        22, 12, 2, 4,
+        z=0,
+        height_z=3.0,
+        direction="east"
+    )  # East side is higher
     
     # Add crouch-only underpass area (clearance 0.7, z=1.0, height_z=0.7)
     # Placed above the player spawn (centered at 15,15)
     game_map.objects["crouch-underpass"] = MapBoundary(6, 14, 4, 4, "object", "crouch-underpass", z=0.7, height_z=0.8)
     
     return game_map
-
-# Add 3D pathfinding functions from maze test
-def is_valid_position(game_map, x, y, z, max_jump_height=1.5):
-    """Check if a position is valid in the 3D game map."""
-    # Check if the position is within any valid area and not colliding with obstacles
-    return game_map.is_valid_position(x, y, z, 0.5, 1.0)
-
-def find_path_3d(game_map, start, goal, max_jump_height=1.5):
-    """Find a path considering jumping and elevation."""
-    # Extract coordinates
-    start_x, start_y, start_z = start[0], start[1], start[2]
-    goal_x, goal_y, goal_z = goal[0], goal[1], goal[2]
-    
-    # Update the goal's Z value to match the elevation at that point
-    actual_goal_z = game_map.get_elevation_at_position(goal_x, goal_y)
-    goal_z = actual_goal_z
-    print(f"Adjusting target Z to match terrain elevation: {actual_goal_z}")
-    
-    # Convert to grid cells
-    start_cell = (int(start_x), int(start_y), start_z)
-    goal_cell = (int(goal_x), int(goal_y), goal_z)
-    
-    # Check if start or goal are invalid
-    if not is_valid_position(game_map, start_cell[0], start_cell[1], start_cell[2]):
-        print(f"Start position {start_cell} is invalid")
-        return []
-    
-    if not is_valid_position(game_map, goal_cell[0], goal_cell[1], goal_cell[2]):
-        print(f"Goal position {goal_cell} is invalid")
-        # Try finding nearest valid position to goal
-        for offset_x in range(-2, 3):
-            for offset_y in range(-2, 3):
-                test_x = goal_cell[0] + offset_x
-                test_y = goal_cell[1] + offset_y
-                test_z = game_map.get_elevation_at_position(test_x, test_y)
-                if is_valid_position(game_map, test_x, test_y, test_z):
-                    print(f"Using alternative goal at {(test_x, test_y, test_z)}")
-                    goal_cell = (test_x, test_y, test_z)
-                    goal_z = test_z
-                    # Break both loops
-                    break
-            else:
-                continue
-            break
-        else:
-            # If we couldn't find any valid position near the goal
-            return []
-    
-    # BFS with elevation consideration
-    frontier = collections.deque([start_cell])
-    came_from = {start_cell: None}
-    
-    # Track iteration count to prevent infinite loops
-    iterations = 0
-    max_iterations = 5000
-    
-    while frontier and iterations < max_iterations:
-        iterations += 1
-        current = frontier.popleft()
-        current_x, current_y, current_z = current
-        
-        # Exit if we reached the goal
-        if (current_x, current_y) == (goal_cell[0], goal_cell[1]) and abs(current_z - goal_cell[2]) < 0.1:
-            print(f"Path found after {iterations} iterations")
-            break
-        
-        # Get current cell elevation
-        current_elev = game_map.get_elevation_at_position(current_x, current_y)
-        
-        # Try all eight directions (including diagonals)
-        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)]:
-            neighbor_x, neighbor_y = current_x + dx, current_y + dy
-            
-            # Skip invalid positions or out of bounds
-            if (neighbor_x < 0 or neighbor_y < 0 or 
-                neighbor_x >= game_map.width or neighbor_y >= game_map.height):
-                continue
-                
-            # Get neighbor elevation (actual height of the terrain)
-            neighbor_elev = game_map.get_elevation_at_position(neighbor_x, neighbor_y)
-            
-            # Check for special traversal through stairs or ramps
-            is_on_stairs = False
-            is_on_ramp = False
-            
-            # Check if current position is on stairs
-            for stair in game_map.stairs.values():
-                if (stair.x <= current_x <= stair.x + stair.width and 
-                    stair.y <= current_y <= stair.y + stair.height):
-                    is_on_stairs = True
-                    break
-            
-            # Check if current position is on ramp
-            for ramp in game_map.ramps.values():
-                if (ramp.x <= current_x <= ramp.x + ramp.width and 
-                    ramp.y <= current_y <= ramp.y + ramp.height):
-                    is_on_ramp = True
-                    break
-            
-            # Same level - easy transition
-            if abs(neighbor_elev - current_z) < 0.1:
-                neighbor_z = neighbor_elev
-                neighbor = (neighbor_x, neighbor_y, neighbor_z)
-                if neighbor not in came_from and is_valid_position(game_map, neighbor_x, neighbor_y, neighbor_z):
-                    came_from[neighbor] = current
-                    frontier.append(neighbor)
-            
-            # Going down is always possible
-            elif neighbor_elev < current_z:
-                neighbor_z = neighbor_elev
-                neighbor = (neighbor_x, neighbor_y, neighbor_z)
-                if neighbor not in came_from and is_valid_position(game_map, neighbor_x, neighbor_y, neighbor_z):
-                    came_from[neighbor] = current
-                    frontier.append(neighbor)
-            
-            # Going up requires a jump check or stairs/ramp
-            elif neighbor_elev > current_z:
-                # Allow higher climbs when on stairs or ramps
-                max_climb = max_jump_height
-                if is_on_stairs or is_on_ramp:
-                    max_climb = 3.0  # Allow climbing full stairs height
-                
-                if neighbor_elev - current_z <= max_climb:
-                    neighbor_z = neighbor_elev
-                    neighbor = (neighbor_x, neighbor_y, neighbor_z)
-                    if neighbor not in came_from and is_valid_position(game_map, neighbor_x, neighbor_y, neighbor_z):
-                        came_from[neighbor] = current
-                        frontier.append(neighbor)
-    
-    if iterations >= max_iterations:
-        print(f"Pathfinding reached iteration limit ({max_iterations})")
-        return []
-    
-    # Goal processing
-    goal_grid = (goal_cell[0], goal_cell[1], goal_cell[2])
-    if goal_grid not in came_from:
-        print("No path found - goal not reachable")
-        return []
-    
-    # Reconstruct path
-    path = []
-    current = goal_grid
-    
-    while current:
-        path.append((current[0] + 0.5, current[1] + 0.5, current[2]))
-        current = came_from[current]
-    
-    path.reverse()
-    return path
 
 def run_movement_test():
     """Test the player movement with physics and collision response."""
@@ -337,8 +199,7 @@ def run_movement_test():
                     print(f"Setting AI waypoint at ({wx}, {wy}, {target_elevation})")
                     
                     # Find path from AI's current position to the target
-                    ai_path = find_path_3d(
-                        game_map,
+                    ai_path = game_map.find_path_3d(
                         (ai_player.location[0], ai_player.location[1], ai_player.location[2]),
                         (wx, wy, target_elevation),
                         max_jump_height=1.5
@@ -359,6 +220,7 @@ def run_movement_test():
                         )
                         ai_waypoints = [(nearest_patrol_point[0], nearest_patrol_point[1], 
                                         game_map.get_elevation_at_position(nearest_patrol_point[0], nearest_patrol_point[1]))]
+                        current_patrol_point = 0
                         object_hit_message = "Target unreachable - using nearest patrol point"
                         object_hit_timer = 60
         
@@ -403,6 +265,9 @@ def run_movement_test():
         
         # Update AI player movement (patrol or follow waypoints)
         if ai_waypoints:
+            # Ensure current_patrol_point is within bounds
+            if current_patrol_point >= len(ai_waypoints):
+                current_patrol_point = 0
             # Get current target from waypoints list
             current_waypoint = ai_waypoints[current_patrol_point]
             target_point = (current_waypoint[0], current_waypoint[1])

@@ -66,6 +66,10 @@ The simulator includes detailed gameplay mechanics:
 - **Combat**: Aim ratings, damage calculation, armor system
 - **Abilities**: Smokes, flashes, molotovs, and recon abilities with proper effects
 - **Maps**: Multiple maps with proper elevation, ramps, stairs, and objects
+    - **Elevation** (`MapArea.elevation`): The flat base height of a zone or area.
+    - **Z-coordinate** (`MapBoundary.z`): The vertical position of a boundary's base in world space (e.g. floor of a ramp or object).
+    - **Height_z** (`MapBoundary.height_z`): The vertical thickness or rise of the boundary above its base Z-level (e.g. ramp height, stair rise, object height).
+    - **get_elevation_at_position(x, y)**: Samples the terrain height at (x,y), combining area elevation with ramp/stair slopes and object heights to determine the actual ground level.
 
 ## Project Structure
 
@@ -74,14 +78,15 @@ vct-simulator/
 ├── app/
 │   ├── simulation/
 │   │   ├── models/
-│   │   │   ├── ability.py  # Ability mechanics
-│   │   │   ├── map.py      # Map and environment
-│   │   │   └── player.py   # Player mechanics
-│   │   ├── test_abilities.py    # Test ability mechanics
-│   │   ├── test_movement.py     # Test movement mechanics
-│   │   ├── test_maze.py         # Test pathfinding
-│   │   ├── vct_simulator.py     # Main simulator
-│   │   └── vct_visualizer.py    # Tournament visualization
+│   │   │   ├── ability.py      # Ability mechanics
+│   │   │   ├── blackboard.py   # Knowledge blackboards to share information
+│   │   │   ├── map.py          # Map and environment
+│   │   │   ├── match.py        # Match info that persists across rounds    
+│   │   │   ├── player.py       # Player mechanics
+│   │   │   ├── round.py        # Round info that resets each round
+│   │   │   ├── team.py         # Team info
+|   |   |   └── weapon.py       # Weapon stats and handling
+│   │   ├── test_movement.py    # Test movement mechanics
 ├── docs/
 ├── maps/
 │   └── haven.py            # Haven map representation

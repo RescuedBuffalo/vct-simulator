@@ -423,11 +423,11 @@ class RampBoundary(MapBoundary):
         if self.direction == "north":
             # North side is higher
             rel_pos = (y - self.y) / self.height
-            return self.z + (1 - rel_pos) * self.height_z
+            return self.z + rel_pos * self.height_z
         elif self.direction == "south":
             # South side is higher
             rel_pos = (y - self.y) / self.height
-            return self.z + rel_pos * self.height_z
+            return self.z + (1 - rel_pos) * self.height_z
         elif self.direction == "east":
             # East side is higher
             rel_pos = (x - self.x) / self.width
@@ -606,30 +606,26 @@ class Map:
         # Start with default elevation 0
         elevation = 0.0
         
-        # Check areas first
-        for area in self.areas.values():
+        # Check areas first (consider elevated areas first)
+        for area in sorted(self.areas.values(), key=lambda a: a.elevation, reverse=True):
             if area.x <= x < area.x + area.width and area.y <= y < area.y + area.height:
                 elevation = area.elevation
                 break
         
-        # Check for ramps and stairs which provide specific elevation changes
-        for boundary in self.boundaries.values():
-            if not (boundary.x <= x < boundary.x + boundary.width and 
-                   boundary.y <= y < boundary.y + boundary.height):
-                continue
-                
-            if isinstance(boundary, RampBoundary):
-                # Get specific elevation from ramp
-                return boundary.get_elevation_at_point(x, y)
-                
-            elif isinstance(boundary, StairsBoundary):
-                # Get specific elevation from stairs
-                return boundary.get_elevation_at_point(x, y)
-                
-            elif boundary.boundary_type in ["wall", "object"] and boundary.z > elevation:
-                # Standard walls and objects override area elevation if higher
+        # Check for ramps directly in the ramps collection
+        for ramp in self.ramps.values():
+            if ramp.x <= x < ramp.x + ramp.width and ramp.y <= y < ramp.y + ramp.height:
+                return ramp.get_elevation_at_point(x, y)
+        # Check for stairs directly in the stairs collection
+        for stair in self.stairs.values():
+            if stair.x <= x < stair.x + stair.width and stair.y <= y < stair.y + stair.height:
+                return stair.get_elevation_at_point(x, y)
+        # Override with walls/objects elevation if higher
+        for boundary in list(self.walls.values()) + list(self.objects.values()):
+            if (boundary.x <= x < boundary.x + boundary.width and 
+                boundary.y <= y < boundary.y + boundary.height and 
+                boundary.z > elevation):
                 elevation = boundary.z
-                
         return elevation
     
     def is_within_bomb_site(self, x: float, y: float, z: float = 0.0) -> Optional[str]:
@@ -862,6 +858,93 @@ class Map:
         while curr is not None:
             path.append((curr[0] + 0.5, curr[1] + 0.5))
             curr = came_from[curr]
+        path.reverse()
+        return path
+
+    def find_path_3d(self, start: Tuple[float, float, float], goal: Tuple[float, float, float], max_jump_height: float = 1.5, radius: float = 0.5, height: float = 1.0) -> List[Tuple[float, float, float]]:
+        """Find a path considering jumping and elevation changes in 3D using BFS."""
+        import collections
+        # Extract start and goal coordinates
+        start_x, start_y, start_z = start
+        goal_x, goal_y, goal_z = goal
+        # Adjust goal Z to match actual terrain elevation
+        actual_goal_z = self.get_elevation_at_position(goal_x, goal_y)
+        goal_z = actual_goal_z
+        # Convert to discrete grid cells
+        start_cell = (int(start_x), int(start_y), start_z)
+        goal_cell = (int(goal_x), int(goal_y), goal_z)
+        # Early exit if start invalid
+        if not self.is_valid_position(start_cell[0], start_cell[1], start_cell[2], radius, height):
+            return []
+        # Validate or adjust goal position
+        if not self.is_valid_position(goal_cell[0], goal_cell[1], goal_cell[2], radius, height):
+            found_alt = False
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    tx = goal_cell[0] + dx
+                    ty = goal_cell[1] + dy
+                    tz = self.get_elevation_at_position(tx, ty)
+                    if self.is_valid_position(tx, ty, tz, radius, height):
+                        goal_cell = (tx, ty, tz)
+                        goal_z = tz
+                        found_alt = True
+                        break
+                if found_alt:
+                    break
+            if not found_alt:
+                return []
+        # BFS setup
+        frontier = collections.deque([start_cell])
+        came_from = {start_cell: None}
+        iterations = 0
+        max_iterations = 5000
+        # Perform BFS
+        while frontier and iterations < max_iterations:
+            iterations += 1
+            cx, cy, cz = frontier.popleft()
+            # Goal reached?
+            if (cx, cy) == (goal_cell[0], goal_cell[1]) and abs(cz - goal_z) < 0.1:
+                break
+            # Current elevation
+            current_elev = self.get_elevation_at_position(cx, cy)
+            # Explore neighbors
+            for dx, dy in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(1,1),(-1,1),(1,-1)]:
+                nx, ny = cx + dx, cy + dy
+                # Bounds check
+                if nx < 0 or ny < 0 or nx >= self.width or ny >= self.height:
+                    continue
+                nelev = self.get_elevation_at_position(nx, ny)
+                # Check if standing on stairs or ramp at current
+                on_stairs = any(st.x <= cx <= st.x + st.width and st.y <= cy <= st.y + st.height for st in self.stairs.values())
+                on_ramp   = any(rp.x <= cx <= rp.x + rp.width and rp.y <= cy <= rp.y + rp.height for rp in self.ramps.values())
+                # Determine neighbor z
+                if abs(nelev - cz) < 0.1:
+                    nz = nelev
+                elif nelev < cz:
+                    nz = nelev  # always allow going down
+                else:
+                    # going up
+                    climb = max_jump_height
+                    if on_stairs or on_ramp:
+                        climb = 3.0
+                    if nelev - cz > climb:
+                        continue
+                    nz = nelev
+                neighbor = (nx, ny, nz)
+                # Validate and enqueue
+                if neighbor not in came_from and self.is_valid_position(nx, ny, nz, radius, height):
+                    came_from[neighbor] = (cx, cy, cz)
+                    frontier.append(neighbor)
+        # Check for failure
+        finish_key = (goal_cell[0], goal_cell[1], goal_cell[2])
+        if iterations >= max_iterations or finish_key not in came_from:
+            return []
+        # Reconstruct the path
+        path = []
+        node = finish_key
+        while node is not None:
+            path.append((node[0] + 0.5, node[1] + 0.5, node[2]))
+            node = came_from[node]
         path.reverse()
         return path
 
