@@ -49,10 +49,14 @@
     },
     "objects" : {
         "instructions" : "// e = elevation, > 0.5 means you cannot jump on it, > 0.75 means you can see over.",
-        "pizza-box" : {"x" : 10, "y" : 18, "w" : 1, "h" : 1, "z" : 1, "e" : 0.5}
+        "pizza-box" : {"x" : 10, "y" : 18, "w" : 1, "h" : 1, "z" : 1, "height_z" : 0.5}
     },
     "stairs" : {
-        "a-heaven-stairs" : {"x" : 5, "y" : 23, "w" : 1, "h" : 2, "z" : 1, "e" : 1}
+        "a-heaven-stairs" : {"x" : 5, "y" : 23, "w" : 1, "h" : 2, 
+        "z" : 1, "height_z" : 1, "direction" : "north"}
+    },
+    "ramps" : {
+
     },
     "bomb-sites" : {
         "a-site" : {"x" : 9, "y" : 27, "w" : 3, "h" : 5, "z" : 2}

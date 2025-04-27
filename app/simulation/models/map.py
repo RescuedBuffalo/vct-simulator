@@ -8,15 +8,28 @@ from app.simulation.models.player import Player
 
 @dataclass
 class MapArea:
-    name: str                   # e.g. "A Site", "Mid", "Attacker Spawn"
-    area_type: str              # "site", "spawn", "mid", "choke", "connector", "heaven", etc.
-    center: Tuple[float, float] # Coordinates for this area's central point
+    """Represents an area in the game map with specific properties."""
+    name: str             # Unique identifier for the area
+    x: float              # X-coordinate of the area
+    y: float              # Y-coordinate of the area
+    width: float          # Width of the area
+    height: float         # Height of the area
+    elevation: float = 0  # Base elevation of the area
+    area_type: str = ""   # Type of area (e.g., "site", "spawn", "mid")
+    center: Tuple[float, float] = None  # Center coordinates, computed if not provided
     neighbors: List[str] = field(default_factory=list)  # Adjacent areas (by name) for pathfinding
-    radius: float = 0.0         # Radius for area (e.g. bomb plant radius if site)
-    is_plant_site: bool = False # True if this area is a bomb site where spike can be planted
-    elevation: int = 0          # Height level (0=ground, +1=elevated/heaven, -1=lower/hell)
-    cover_objects: List[Dict[str, Any]] = field(default_factory=list)  # Boxes, crates, etc.
-    one_way_connections: List[str] = field(default_factory=list)  # Areas reachable only from here (drops)
+    radius: float = 0.0   # Radius for circular representation
+    is_plant_site: bool = False  # Whether spike can be planted here
+    
+    def __post_init__(self):
+        """Initialize computed fields after constructor."""
+        if self.center is None:
+            self.center = (self.x + self.width / 2, self.y + self.height / 2)
+    
+    def contains_point(self, x: float, y: float, z: float = 0.0) -> bool:
+        """Check if the area contains a point."""
+        return (self.x <= x < self.x + self.width and 
+                self.y <= y < self.y + self.height)
 
 @dataclass
 class MapLayout:
@@ -381,20 +394,122 @@ class MapBoundary:
         # Check if 3D distance is less than the radius
         return (distance_x * distance_x + distance_y * distance_y + distance_z * distance_z) < (radius * radius)
 
+class RampBoundary(MapBoundary):
+    """Represents a ramp boundary with elevation change in a specific direction."""
+    def __init__(self, name: str, x: float, y: float, width: float, height: float, 
+                 z: float, height_z: float, direction: str):
+        """
+        Initialize a ramp boundary.
+        
+        Args:
+            name: Unique identifier for the boundary
+            x, y: Position coordinates
+            width, height: Size of the boundary
+            z: Base elevation
+            height_z: Height of the ramp (z + height_z = top elevation)
+            direction: Direction of the ramp ("north", "south", "east", "west")
+                       Indicates which side is higher: north = north side is higher
+        """
+        super().__init__(x, y, width, height, "ramp", name, 0, z, height_z)
+        self.direction = direction
+        
+    def get_elevation_at_point(self, x: float, y: float) -> float:
+        """Get the elevation at a specific point on the ramp."""
+        if not (self.x <= x <= self.x + self.width and 
+                self.y <= y <= self.y + self.height):
+            return 0.0
+            
+        # Calculate relative position on the ramp (0 to 1)
+        if self.direction == "north":
+            # North side is higher
+            rel_pos = (y - self.y) / self.height
+            return self.z + (1 - rel_pos) * self.height_z
+        elif self.direction == "south":
+            # South side is higher
+            rel_pos = (y - self.y) / self.height
+            return self.z + rel_pos * self.height_z
+        elif self.direction == "east":
+            # East side is higher
+            rel_pos = (x - self.x) / self.width
+            return self.z + rel_pos * self.height_z
+        elif self.direction == "west":
+            # West side is higher
+            rel_pos = (x - self.x) / self.width
+            return self.z + (1 - rel_pos) * self.height_z
+        
+        return self.z
+
+class StairsBoundary(MapBoundary):
+    """Represents a stairs boundary with discrete elevation changes."""
+    def __init__(self, name: str, x: float, y: float, width: float, height: float, 
+                 z: float, height_z: float, direction: str, steps: int = 5):
+        """
+        Initialize a stairs boundary.
+        
+        Args:
+            name: Unique identifier for the boundary
+            x, y: Position coordinates
+            width, height: Size of the boundary
+            z: Base elevation
+            height_z: Total height of the stairs
+            direction: Direction of the stairs ("north", "south", "east", "west")
+            steps: Number of steps in the staircase
+        """
+        super().__init__(x, y, width, height, "stairs", name, 0, z, height_z)
+        self.direction = direction
+        self.steps = max(2, steps)  # Minimum 2 steps
+        self.step_height = height_z / self.steps
+        
+    def get_elevation_at_point(self, x: float, y: float) -> float:
+        """Get the elevation at a specific point on the stairs."""
+        if not (self.x <= x <= self.x + self.width and 
+                self.y <= y <= self.y + self.height):
+            return 0.0
+            
+        # Calculate which step the point is on
+        if self.direction in ["north", "south"]:
+            # Steps run along y-axis
+            length = self.height
+            pos = y - self.y
+            if self.direction == "north":
+                pos = length - pos  # Flip for north direction
+        else:
+            # Steps run along x-axis
+            length = self.width
+            pos = x - self.x
+            if self.direction == "west":
+                pos = length - pos  # Flip for west direction
+                
+        # Calculate step number
+        step_length = length / self.steps
+        step_num = min(self.steps - 1, int(pos / step_length))
+        
+        # Return elevation for this step
+        return self.z + step_num * self.step_height
+
 class Map:
     """Represents a game map with boundaries and areas."""
     
-    def __init__(self, name: str, width: int, height: int):
-        """Initialize a new map with dimensions."""
+    def __init__(self, name: str = "", width: int = 100, height: int = 100):
+        """
+        Initialize a new map.
+        
+        Args:
+            name: Name of the map
+            width: Width of the map in game units
+            height: Height of the map in game units
+        """
         self.name = name
         self.width = width
         self.height = height
-        self.areas = {}  # Map areas by name
-        self.walls = {}  # Wall boundaries by name
-        self.objects = {}  # Object boundaries by name
-        self.stairs = {}  # Stair boundaries by name
-        self.bomb_sites = {}  # Bomb site boundaries by name
-        self.ramps = {}  # Ramp boundaries for smooth elevation changes
+        self.areas = {}               # Areas by name
+        self.boundaries = {}          # All boundaries (walls, objects, ramps, stairs, etc.)
+        self.walls = {}               # Walls by name
+        self.objects = {}             # Objects (boxes, etc.) by name
+        self.ramps = {}               # Ramps by name
+        self.stairs = {}              # Stairs by name
+        self.plant_locations = {}     # Bomb plant locations by site name (A, B, C)
+        self.default_positions = {}   # Default positions (spawns, etc.)
     
     @classmethod
     def from_json(cls, filepath: str) -> 'Map':
@@ -477,60 +592,45 @@ class Map:
         return None
     
     def get_elevation_at_position(self, x: float, y: float) -> float:
-        """Get the elevation (z value) at a given x,y position."""
-        # Check if on a ramp
-        for name, ramp in self.ramps.items():
-            if ramp.contains_point(x, y):
-                # Calculate z based on position along the ramp
-                if ramp.direction == "north":
-                    # Ramp goes from south to north (y increases)
-                    progress = (y - ramp.y) / ramp.height
-                    return ramp.z + progress * (ramp.height_z - ramp.z)
-                elif ramp.direction == "south":
-                    # Ramp goes from north to south (y decreases)
-                    progress = 1.0 - (y - ramp.y) / ramp.height
-                    return ramp.z + progress * (ramp.height_z - ramp.z)
-                elif ramp.direction == "east":
-                    # Ramp goes from west to east (x increases)
-                    progress = (x - ramp.x) / ramp.width
-                    return ramp.z + progress * (ramp.height_z - ramp.z)
-                elif ramp.direction == "west":
-                    # Ramp goes from east to west (x decreases)
-                    progress = 1.0 - (x - ramp.x) / ramp.width
-                    return ramp.z + progress * (ramp.height_z - ramp.z)
+        """
+        Get the elevation (z-coordinate) at a given position on the map.
+        Takes into account areas, ramps, and stairs.
         
-        # Check if on stairs
-        for stair in self.stairs.values():
-            if stair.contains_point(x, y):
-                # Gradually interpolate elevation along stair direction
-                if hasattr(stair, 'direction'):
-                    if stair.direction == 'north':
-                        progress = (y - stair.y) / stair.height
-                    elif stair.direction == 'south':
-                        progress = 1.0 - (y - stair.y) / stair.height
-                    elif stair.direction == 'east':
-                        progress = (x - stair.x) / stair.width
-                    elif stair.direction == 'west':
-                        progress = 1.0 - (x - stair.x) / stair.width
-                    else:
-                        progress = 1.0
-                    return stair.z + progress * stair.height_z
-                # Fallback: instant climb
-                return stair.z + stair.height_z
+        Args:
+            x: X-coordinate of the position
+            y: Y-coordinate of the position
+            
+        Returns:
+            float: The elevation value at the position
+        """
+        # Start with default elevation 0
+        elevation = 0.0
         
-        # Check object top surfaces (e.g., boxes)
-        for obj in self.objects.values():
-            # If XY is within object boundary, treat top surface as elevation
-            if obj.x <= x <= obj.x + obj.width and obj.y <= y <= obj.y + obj.height:
-                return obj.z + obj.height_z
+        # Check areas first
+        for area in self.areas.values():
+            if area.x <= x < area.x + area.width and area.y <= y < area.y + area.height:
+                elevation = area.elevation
+                break
         
-        # Check normal areas for their elevation
-        for area in sorted(self.areas.values(), key=lambda a: a.z, reverse=True):
-            # Check area based on XY and its base elevation
-            if area.contains_point(x, y, area.z):
-                return area.z
-        
-        return 0.0  # Default ground level
+        # Check for ramps and stairs which provide specific elevation changes
+        for boundary in self.boundaries.values():
+            if not (boundary.x <= x < boundary.x + boundary.width and 
+                   boundary.y <= y < boundary.y + boundary.height):
+                continue
+                
+            if isinstance(boundary, RampBoundary):
+                # Get specific elevation from ramp
+                return boundary.get_elevation_at_point(x, y)
+                
+            elif isinstance(boundary, StairsBoundary):
+                # Get specific elevation from stairs
+                return boundary.get_elevation_at_point(x, y)
+                
+            elif boundary.boundary_type in ["wall", "object"] and boundary.z > elevation:
+                # Standard walls and objects override area elevation if higher
+                elevation = boundary.z
+                
+        return elevation
     
     def is_within_bomb_site(self, x: float, y: float, z: float = 0.0) -> Optional[str]:
         """Check if a position is within a bomb site."""
@@ -547,9 +647,10 @@ class Map:
         
         # Prevent walking under elevated areas: if xy is in an area's footprint but below its base height
         for area in self.areas.values():
+            # Prevent walking under elevated areas: if inside area's footprint but below its base elevation
             if (area.x <= x <= area.x + area.width and
                 area.y <= y <= area.y + area.height and
-                z < area.z):
+                z < area.elevation):
                 return False
 
         # Check if position is within any valid area by elevation
@@ -733,6 +834,91 @@ class Map:
             return hit_point, obj_env, None
         # Miss
         return hit_point, None, None
+
+    def find_path(self, start: Tuple[float, float], goal: Tuple[float, float], radius: float = 0.5, height: float = 1.0) -> List[Tuple[float, float]]:
+        """Find a path on the map grid from start to goal using BFS."""
+        import collections
+        start_cell = (int(start[0]), int(start[1]))
+        end_cell = (int(goal[0]), int(goal[1]))
+        frontier = collections.deque([start_cell])
+        came_from = {start_cell: None}
+        while frontier:
+            current = frontier.popleft()
+            if current == end_cell:
+                break
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                neighbor = (current[0] + dx, current[1] + dy)
+                x, y = neighbor
+                if 0 <= x < self.width and 0 <= y < self.height and neighbor not in came_from:
+                    # Check if this cell is passable
+                    if self.is_valid_position(x + 0.5, y + 0.5, 0.0, radius, height):
+                        came_from[neighbor] = current
+                        frontier.append(neighbor)
+        # Reconstruct path if found
+        if end_cell not in came_from:
+            return []
+        path = []
+        curr = end_cell
+        while curr is not None:
+            path.append((curr[0] + 0.5, curr[1] + 0.5))
+            curr = came_from[curr]
+        path.reverse()
+        return path
+
+    # Add these methods to the Map class
+    def add_area(self, area: MapArea) -> None:
+        """Add an area to the map."""
+        self.areas[area.name] = area
+    
+    def add_boundary(self, boundary) -> None:
+        """
+        Add a boundary to the map.
+        
+        This method handles different boundary types including:
+        - Regular MapBoundary objects
+        - RampBoundary objects
+        - StairsBoundary objects
+        """
+        self.boundaries[boundary.name] = boundary
+        
+        # Update specific collections based on boundary type
+        if boundary.boundary_type == "wall":
+            self.walls[boundary.name] = boundary
+        elif boundary.boundary_type == "object":
+            self.objects[boundary.name] = boundary
+        elif boundary.boundary_type == "ramp" or isinstance(boundary, RampBoundary):
+            self.ramps[boundary.name] = boundary
+        elif boundary.boundary_type == "stairs" or isinstance(boundary, StairsBoundary):
+            self.stairs[boundary.name] = boundary
+
+    def set_elevation_at_position(self, x: float, y: float, elevation: float) -> None:
+        """
+        Set the elevation at a specific x,y position on the map.
+        
+        This is primarily used for initialization and special terrain features.
+        
+        Args:
+            x: X-coordinate of the position
+            y: Y-coordinate of the position
+            elevation: The elevation value to set
+        """
+        # Currently we don't store a full elevation grid
+        # This is used for initialization by special map creation functions
+        
+        # Create a small invisible area to mark this elevation
+        area_name = f"elevation_{x}_{y}"
+        
+        # Check if this position is already within an area
+        for area in self.areas.values():
+            if (area.x <= x < area.x + area.width and 
+                area.y <= y < area.y + area.height):
+                # Update the existing area's elevation
+                area.elevation = elevation
+                return
+        
+        # If no existing area, create a small marker area
+        marker_area = MapArea(area_name, x, y, 1, 1, elevation)
+        self.add_area(marker_area)
 
 class MapVisualizer:
     """Interactive map visualizer using Pygame library."""
