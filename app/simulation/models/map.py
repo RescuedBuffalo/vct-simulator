@@ -643,12 +643,18 @@ class Map:
         
         # Prevent walking under elevated areas: if xy is in an area's footprint but below its base height
         for area in self.areas.values():
-            # Prevent walking under elevated areas: if inside area's footprint but below its base elevation
             if (area.x <= x <= area.x + area.width and
                 area.y <= y <= area.y + area.height and
                 z < area.elevation):
+                # allow if on a ramp or stair surface at this position
+                on_surface = any(ramp.contains_point(x, y, z) for ramp in self.ramps.values())
+                if on_surface:
+                    continue
+                on_surface = any(stair.contains_point(x, y, z) for stair in self.stairs.values())
+                if on_surface:
+                    continue
                 return False
-
+        
         # Check if position is within any valid area by elevation
         if not any(area.contains_point(x, y, z) for area in self.areas.values()):
             return False
@@ -684,10 +690,16 @@ class Map:
         # Get starting and ending areas
         start_area = self.get_area_at_position(start_x, start_y, start_z)
         end_area = self.get_area_at_position(end_x, end_y, end_z)
-        
-        # Must be in a valid area
+        # Must be in a valid area or on a ramp/stair surface
         if not start_area or not end_area:
-            return False
+            # allow if moving onto or off of a ramp or stair
+            on_surface = any(ramp.contains_point(start_x, start_y, start_z) or ramp.contains_point(end_x, end_y, end_z)
+                              for ramp in self.ramps.values())
+            if not on_surface:
+                on_surface = any(stair.contains_point(start_x, start_y, start_z) or stair.contains_point(end_x, end_y, end_z)
+                                  for stair in self.stairs.values())
+            if not on_surface:
+                return False
         
         # Block walking onto higher-elevation areas unless on a ramp or stair
         start_map_elev = self.get_elevation_at_position(start_x, start_y)
