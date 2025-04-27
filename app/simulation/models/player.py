@@ -499,6 +499,65 @@ class Player:
         """Return True if the player is on the ground."""
         return self.ground_contact
 
+    def intersect_ray(self, origin: Tuple[float, float, float], direction: Tuple[float, float, float]) -> Optional[float]:
+        """Return the distance t along the ray at which it intersects this player's sphere, or None if no intersection."""
+        ox, oy, oz = origin
+        dx, dy, dz = direction
+        cx, cy, cz0 = self.location
+        czc = cz0 + self.height * 0.5  # Use center of player for sphere center
+        r = self.radius
+        
+        # Vector from ray origin to sphere center
+        ocx, ocy, ocz = ox - cx, oy - cy, oz - czc
+        
+        # Compute coefficients for quadratic equation
+        # a = dot(direction, direction)
+        a = dx*dx + dy*dy + dz*dz
+        if a < 1e-10:  # Direction vector is too small
+            return None
+            
+        # b = 2 * dot(direction, origin-center)
+        b = 2.0 * (dx*ocx + dy*ocy + dz*ocz)
+        
+        # c = dot(origin-center, origin-center) - r^2
+        c = ocx*ocx + ocy*ocy + ocz*ocz - r*r
+         
+        # Compute discriminant
+        disc = b*b - 4*a*c
+        
+        # No real solutions (ray misses sphere)
+        if disc < 1e-10:
+            return None
+            
+        # Compute the square root of the discriminant
+        sqrt_disc = math.sqrt(disc)
+        
+        # Compute the two solutions
+        t1 = (-b - sqrt_disc) / (2.0 * a)
+        t2 = (-b + sqrt_disc) / (2.0 * a)
+        
+        # Return the nearest non-negative intersection
+        if t1 >= 0.0001:  # Small epsilon to avoid numerical issues
+            return t1
+        elif t2 >= 0.0001:
+            return t2
+        else:
+            return None
+
+    def apply_damage(self, raw: int) -> int:
+        """Apply raw damage to this player, considering armor, return actual damage inflicted."""
+        damage = raw
+        if self.armor > 0:
+            absorbed = min(self.armor, damage)
+            self.armor -= absorbed
+            damage -= absorbed
+        if damage > 0:
+            self.health -= damage
+        if self.health <= 0 and self.alive:
+            self.alive = False
+            self.deaths += 1
+        return damage
+
 def map_orm_player_to_sim_player(orm_player: 'OrmPlayer') -> Player:
     """
     Convert a SQLAlchemy Player model into the simulation Player dataclass.

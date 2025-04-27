@@ -5,7 +5,7 @@ import math
 import random
 import pygame
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -47,7 +47,7 @@ def create_test_map():
     
     # Add crouch-only underpass area (clearance 0.7, z=1.0, height_z=0.7)
     # Placed above the player spawn (centered at 15,15)
-    game_map.objects["crouch-underpass"] = MapBoundary(6, 14, 4, 4, "object", "crouch-underpass", z=0.7, height_z=0.7)
+    game_map.objects["crouch-underpass"] = MapBoundary(6, 14, 4, 4, "object", "crouch-underpass", z=0.7, height_z=0.8)
     
     return game_map
 
@@ -75,7 +75,8 @@ def run_movement_test():
         spray_control=65.0,
         clutch_iq=70.0,
         location=(15.0, 15.0, 0.0),
-        direction=0.0
+        direction=0.0,
+        armor=50
     )
     
     # For AI player testing
@@ -91,7 +92,8 @@ def run_movement_test():
         spray_control=65.0,
         clutch_iq=70.0,
         location=(10.0, 10.0, 0.0),
-        direction=0.0
+        direction=0.0,
+        armor=50
     )
     
     # AI movement points to patrol between
@@ -121,6 +123,12 @@ def run_movement_test():
     damage_timer = 0
     DAMAGE_LIFETIME = 30  # frames
     
+    # Font for labeling objects
+    label_font = pygame.font.SysFont(None, 20)
+    # Variables for displaying object hit messages
+    object_hit_message = None  # type: Optional[str]
+    object_hit_timer = 0      # frames to display the message
+    
     while running:
         # preview time step for elevation check
         dt_preview = 1.0 / 60.0
@@ -136,65 +144,41 @@ def run_movement_test():
                     # Left click: shoot
                     px, py, pz = player.location
                     # Fire from player's head
-                    shooter_z = pz + player.height
+                    shooter_z = (pz + player.height - 0.25)
                     dx = wx - px
                     dy = wy - py
-                    dz = game_map.get_elevation_at_position(wx, wy) + ai_player.height - shooter_z
+                    dz = 0
+                    print("dx, dy, dz: ", dx, dy, dz)
                     dist = math.sqrt(dx*dx + dy*dy + dz*dz)
                     if dist == 0:
                         continue
-                    # Add aim spread based on aim_rating (lower = more spread)
-                    aim_spread = max(1.0 - player.aim_rating / 100.0, 0.01) * 0.1  # radians
-                    spread_angle = random.uniform(-aim_spread, aim_spread)
-                    cos_a = math.cos(spread_angle)
-                    sin_a = math.sin(spread_angle)
-                    dx, dy = dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
+                    # Normalize shooting direction (no aim spread)
                     norm = math.sqrt(dx*dx + dy*dy + dz*dz)
                     dx /= norm
                     dy /= norm
                     dz /= norm
-                    # Raycast: step along the direction until collision
-                    step = 0.05
-                    t = 0.0
-                    hit = False
+                    # Raycast bullet against map and players
+                    origin = (px, py, shooter_z)
+                    print(f"Bullet origin: {origin}")
+                    print(f"Click location: ({wx}, {wy})")
+                    direction = (dx, dy, dz)
                     max_range = 50.0
-                    hit_damage = 0
-                    while t < max_range:
-                        bx = px + dx * t
-                        by = py + dy * t
-                        bz = shooter_z + dz * t
-                        # Check collision with walls/objects (ignore areas)
-                        collided = False
-                        for wall in game_map.walls.values():
-                            if wall.collides_with_circle(bx, by, player.radius, bz, is_3d_check=True):
-                                collided = True
-                                break
-                        for obj in game_map.objects.values():
-                            if obj.collides_with_circle(bx, by, player.radius, bz, is_3d_check=True):
-                                collided = True
-                                break
-                        # Check collision with AI player (3D)
-                        aix, aiy, aiz = ai_player.location
-                        ai_head = aiz + ai_player.height
-                        ai_feet = aiz
-                        ai_radius = ai_player.radius
-                        # 3D distance to capsule (cylinder)
-                        dx_ai = bx - aix
-                        dy_ai = by - aiy
-                        dz_ai = bz - max(min(bz, ai_head), ai_feet)
-                        dist_xy = math.hypot(dx_ai, dy_ai)
-                        if dist_xy < ai_radius and ai_feet <= bz <= ai_head:
-                            collided = True
-                            hit = True
-                            hit_damage = 40  # base damage
-                            ai_player.health -= hit_damage
-                            damage_text = (hit_damage, (aix, aiy, ai_head))
-                            damage_timer = DAMAGE_LIFETIME
-                            break
-                        if collided:
-                            break
-                        t += step
-                    bullet_path = ((px, py), (bx, by))
+                    hit_point, hit_boundary, hit_player = game_map.cast_bullet(origin, direction, max_range, [ai_player])
+                    # Apply damage through the player method if we hit a player
+                    if hit_player:
+                        raw_damage = 40
+                        actual_damage = hit_player.apply_damage(raw_damage)
+                        damage_text = (actual_damage, (hit_player.location[0], hit_player.location[1], hit_player.location[2] + hit_player.height))
+                        damage_timer = DAMAGE_LIFETIME
+                    # Display object hit message if we hit an object
+                    if hit_boundary and getattr(hit_boundary, 'boundary_type', '') == 'object' and not hit_player:
+                        object_hit_message = f"{hit_boundary.name} hit"
+                        object_hit_timer = 60  # show for 60 frames
+                    # Determine bullet path for drawing
+                    if hit_point:
+                        bullet_path = ((px, py), (hit_point[0], hit_point[1]))
+                    else:
+                        bullet_path = ((px, py), (origin[0] + direction[0] * max_range, origin[1] + direction[1] * max_range))
                     bullet_timer = BULLET_LIFETIME
                 elif event.button == 3:
                     # Right click: set AI waypoint
@@ -337,6 +321,187 @@ def run_movement_test():
                 )
             )
         
+        # Draw ramps with directional marking
+        for ramp_name, ramp in game_map.ramps.items():
+            pygame.draw.rect(
+                screen, 
+                (150, 180, 120), 
+                pygame.Rect(
+                    ramp.x * scale, 
+                    screen_height - (ramp.y + ramp.height) * scale, 
+                    ramp.width * scale, 
+                    ramp.height * scale
+                )
+            )
+            # Draw arrow showing direction
+            mid_x = ramp.x * scale + (ramp.width * scale / 2)
+            mid_y = screen_height - (ramp.y * scale + (ramp.height * scale / 2))
+            
+            # Draw direction arrow
+            if ramp.direction == "north":
+                pygame.draw.line(screen, (0, 0, 0), (mid_x, mid_y + 10), (mid_x, mid_y - 10), 2)
+                pygame.draw.line(screen, (0, 0, 0), (mid_x, mid_y - 10), (mid_x - 5, mid_y - 5), 2)
+                pygame.draw.line(screen, (0, 0, 0), (mid_x, mid_y - 10), (mid_x + 5, mid_y - 5), 2)
+            elif ramp.direction == "south":
+                pygame.draw.line(screen, (0, 0, 0), (mid_x, mid_y - 10), (mid_x, mid_y + 10), 2)
+                pygame.draw.line(screen, (0, 0, 0), (mid_x, mid_y + 10), (mid_x - 5, mid_y + 5), 2)
+                pygame.draw.line(screen, (0, 0, 0), (mid_x, mid_y + 10), (mid_x + 5, mid_y + 5), 2)
+            elif ramp.direction == "east":
+                pygame.draw.line(screen, (0, 0, 0), (mid_x - 10, mid_y), (mid_x + 10, mid_y), 2)
+                pygame.draw.line(screen, (0, 0, 0), (mid_x + 10, mid_y), (mid_x + 5, mid_y - 5), 2)
+                pygame.draw.line(screen, (0, 0, 0), (mid_x + 10, mid_y), (mid_x + 5, mid_y + 5), 2)
+            elif ramp.direction == "west":
+                pygame.draw.line(screen, (0, 0, 0), (mid_x + 10, mid_y), (mid_x - 10, mid_y), 2)
+                pygame.draw.line(screen, (0, 0, 0), (mid_x - 10, mid_y), (mid_x - 5, mid_y - 5), 2)
+                pygame.draw.line(screen, (0, 0, 0), (mid_x - 10, mid_y), (mid_x - 5, mid_y + 5), 2)
+        
+        # Draw stairs
+        for stair_name, stair in game_map.stairs.items():
+            pygame.draw.rect(
+                screen, 
+                (180, 150, 120), 
+                pygame.Rect(
+                    stair.x * scale, 
+                    screen_height - (stair.y + stair.height) * scale, 
+                    stair.width * scale, 
+                    stair.height * scale
+                )
+            )
+            # Draw stair pattern
+            steps = 5
+            for i in range(steps):
+                step_y = stair.y + (i * stair.height / steps)
+                pygame.draw.line(
+                    screen,
+                    (0, 0, 0),
+                    (stair.x * scale, screen_height - step_y * scale),
+                    ((stair.x + stair.width) * scale, screen_height - step_y * scale),
+                    1
+                )
+        
+        # Draw player
+        player_pos = (
+            int(player.location[0] * scale), 
+            int(screen_height - player.location[1] * scale)
+        )
+        player_radius = int(player.radius * scale)
+        
+        # Color player based on z-position (height above ground)
+        height_color = min(255, 50 + int(player.z_position * 50))
+        pygame.draw.circle(screen, (0, 0, max(0, height_color)), player_pos, player_radius)
+        
+        # Show height text above player
+        font = pygame.font.SysFont(None, 24)
+        height_text = font.render(f"z: {player.z_position:.1f}", True, (0, 0, 0))
+        screen.blit(height_text, (player_pos[0] - 20, player_pos[1] - 30))
+        
+        # Show if player is jumping
+        if player.in_air:
+            jump_text = font.render("Jumping", True, (255, 0, 0))
+            screen.blit(jump_text, (player_pos[0] - 30, player_pos[1] - 50))
+        
+        # Draw player velocity vector
+        pygame.draw.line(
+            screen,
+            (0, 255, 0),
+            player_pos,
+            (
+                int(player_pos[0] + player.velocity[0] * scale * 2),
+                int(player_pos[1] - player.velocity[1] * scale * 2)
+            ),
+            2
+        )
+        
+        # Draw AI player
+        ai_pos = (
+            int(ai_player.location[0] * scale), 
+            int(screen_height - ai_player.location[1] * scale)
+        )
+        ai_radius = int(ai_player.radius * scale)
+        
+        # Color AI based on z-position
+        ai_height_color = min(255, 50 + int(ai_player.z_position * 50))
+        pygame.draw.circle(screen, (height_color, 0, 0), ai_pos, ai_radius)
+        
+        # Show AI height text
+        ai_height_text = font.render(f"z: {ai_player.z_position:.1f}", True, (0, 0, 0))
+        screen.blit(ai_height_text, (ai_pos[0] - 20, ai_pos[1] - 30))
+        
+        # Draw AI velocity vector
+        pygame.draw.line(
+            screen,
+            (255, 0, 0),
+            ai_pos,
+            (
+                int(ai_pos[0] + ai_player.velocity[0] * scale * 2),
+                int(ai_pos[1] - ai_player.velocity[1] * scale * 2)
+            ),
+            2
+        )
+        
+        # Display AI armor above head
+        armor_text = font.render(f"A: {ai_player.armor}", True, (0, 0, 255))
+        screen.blit(armor_text, (ai_pos[0] - 20, ai_pos[1] - 10))
+        
+        # Draw target point for AI
+        pygame.draw.circle(
+            screen,
+            (255, 0, 0),
+            (int(target_point[0] * scale), int(screen_height - target_point[1] * scale)),
+            5,
+            1
+        )
+        
+        # Draw bullet path if active
+        if bullet_path and bullet_timer > 0:
+            start, end = bullet_path
+            pygame.draw.line(
+                screen, (255, 0, 0),
+                (int(start[0] * scale), int(screen_height - start[1] * scale)),
+                (int(end[0] * scale), int(screen_height - end[1] * scale)), 3
+            )
+            # Draw a marker at hit point for visibility
+            hit_x, hit_y = end
+            pygame.draw.circle(
+                screen, (255, 255, 0),
+                (int(hit_x * scale), int(screen_height - hit_y * scale)),
+                5, 0  # filled circle for visibility
+            )
+            bullet_timer -= 1
+            if bullet_timer <= 0:
+                bullet_path = None
+        # Draw damage text if active
+        if damage_text and damage_timer > 0:
+            dmg, (x, y, z) = damage_text
+            font = pygame.font.SysFont(None, 32)
+            dmg_surface = font.render(f"-{dmg}", True, (255, 0, 0))
+            sx = int(x * scale)
+            sy = int(screen_height - y * scale - z * scale - 30)
+            screen.blit(dmg_surface, (sx - dmg_surface.get_width() // 2, sy))
+            damage_timer -= 1
+            if damage_timer <= 0:
+                damage_text = None
+        
+        # Calculate and display FPS
+        frame_count += 1
+        if time.time() - last_fps_update >= 1.0:
+            fps = frame_count
+            frame_count = 0
+            last_fps_update = time.time()
+        
+        fps_text = font.render(f"FPS: {fps}", True, (0, 0, 0))
+        screen.blit(fps_text, (10, 10))
+        
+        # Draw player position text
+        pos_text = font.render(f"Pos: {player.location[0]:.2f}, {player.location[1]:.2f}, {player.location[2]:.2f}", True, (0, 0, 0))
+        screen.blit(pos_text, (10, 30))
+        
+        # Draw object hit message if active
+        if object_hit_timer > 0 and object_hit_message:
+            msg_surface = font.render(object_hit_message, True, (255, 0, 0))
+            screen.blit(msg_surface, (10, 50))
+            object_hit_timer -= 1
+        
         # Draw objects
         for obj_name, obj in game_map.objects.items():
             # Height-based color (taller = darker)
@@ -351,6 +516,12 @@ def run_movement_test():
                     obj.height * scale
                 )
             )
+            # Draw labels only for boxes
+            if obj_name.startswith("box"):
+                label_surface = label_font.render(obj_name, True, (0, 0, 0))
+                label_x = int((obj.x + obj.width / 2) * scale) - label_surface.get_width() // 2
+                label_y = int(screen_height - (obj.y + obj.height / 2) * scale) - label_surface.get_height() // 2
+                screen.blit(label_surface, (label_x, label_y))
         
         # Draw ramps with directional marking
         for ramp_name, ramp in game_map.ramps.items():
@@ -470,6 +641,10 @@ def run_movement_test():
             2
         )
         
+        # Display AI armor above head
+        armor_text = font.render(f"A: {ai_player.armor}", True, (0, 0, 255))
+        screen.blit(armor_text, (ai_pos[0] - 20, ai_pos[1] - 10))
+        
         # Draw target point for AI
         pygame.draw.circle(
             screen,
@@ -487,6 +662,13 @@ def run_movement_test():
                 (int(start[0] * scale), int(screen_height - start[1] * scale)),
                 (int(end[0] * scale), int(screen_height - end[1] * scale)), 3
             )
+            # Draw a marker at hit point for visibility
+            hit_x, hit_y = end
+            pygame.draw.circle(
+                screen, (255, 255, 0),
+                (int(hit_x * scale), int(screen_height - hit_y * scale)),
+                5, 0  # filled circle for visibility
+            )
             bullet_timer -= 1
             if bullet_timer <= 0:
                 bullet_path = None
@@ -501,16 +683,6 @@ def run_movement_test():
             damage_timer -= 1
             if damage_timer <= 0:
                 damage_text = None
-        
-        # Calculate and display FPS
-        frame_count += 1
-        if time.time() - last_fps_update >= 1.0:
-            fps = frame_count
-            frame_count = 0
-            last_fps_update = time.time()
-        
-        fps_text = font.render(f"FPS: {fps}", True, (0, 0, 0))
-        screen.blit(fps_text, (10, 10))
         
         # Update display
         pygame.display.flip()

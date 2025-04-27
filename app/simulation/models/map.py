@@ -4,6 +4,7 @@ import json
 import random
 import math
 import pygame
+from app.simulation.models.player import Player
 
 @dataclass
 class MapArea:
@@ -625,6 +626,113 @@ class Map:
                 return False
         
         return True
+
+    def raycast(self, origin: Tuple[float, float, float], direction: Tuple[float, float, float], max_range: float = 50.0) -> Tuple[Optional[float], Optional[Tuple[float, float, float]], Optional[MapBoundary]]:
+        """
+        Perform an exact 3D raycast against walls and objects.
+        Returns (t, hit_point, hit_object) where t is the distance along the ray, hit_point is the 3D point, and hit_object is a MapBoundary or None if miss.
+        """
+        # Unpack origin and direction
+        ox, oy, oz = origin
+        dx, dy, dz = direction
+        nearest_t = max_range
+        hit_obj = None
+        hit_point = None
+        # Check AABB intersections for walls and objects
+        for boundary in list(self.walls.values()) + list(self.objects.values()):
+            # AABB bounds
+            mn_x, mn_y, mn_z = boundary.x, boundary.y, boundary.z
+            mx_x, mx_y, mx_z = boundary.x + boundary.width, boundary.y + boundary.height, boundary.z + boundary.height_z
+            tmin, tmax = 0.0, max_range
+            # X slab
+            if abs(dx) < 1e-10:
+                # Ray is parallel to slab. No hit if origin not within slab
+                if ox < mn_x or ox > mx_x:
+                    continue
+            else:
+                # Compute intersection t value of ray with near and far plane of slab
+                t1 = (mn_x - ox) / dx
+                t2 = (mx_x - ox) / dx
+                if t1 > t2:
+                    t1, t2 = t2, t1  # Swap so t1 is intersection with near plane
+                
+                # Update tmin and tmax
+                tmin = max(tmin, t1)
+                tmax = min(tmax, t2)
+                if tmin > tmax:
+                    continue  # No intersection with this boundary
+            
+            # Y slab
+            if abs(dy) < 1e-10:
+                # Ray is parallel to slab. No hit if origin not within slab
+                if oy < mn_y or oy > mx_y:
+                    continue
+            else:
+                # Compute intersection t value of ray with near and far plane of slab
+                t1 = (mn_y - oy) / dy
+                t2 = (mx_y - oy) / dy
+                if t1 > t2:
+                    t1, t2 = t2, t1  # Swap so t1 is intersection with near plane
+                
+                # Update tmin and tmax
+                tmin = max(tmin, t1)
+                tmax = min(tmax, t2)
+                if tmin > tmax:
+                    continue  # No intersection with this boundary
+            
+            # Z slab
+            if abs(dz) < 1e-10:
+                # Ray is parallel to slab. No hit if origin not within slab
+                if oz < mn_z or oz > mx_z:
+                    continue
+            else:
+                # Compute intersection t value of ray with near and far plane of slab
+                t1 = (mn_z - oz) / dz
+                t2 = (mx_z - oz) / dz
+                if t1 > t2:
+                    t1, t2 = t2, t1  # Swap so t1 is intersection with near plane
+                
+                # Update tmin and tmax
+                tmin = max(tmin, t1)
+                tmax = min(tmax, t2)
+                if tmin > tmax:
+                    continue  # No intersection with this boundary
+            
+            # If we reach here, ray intersects all 3 slabs. If t is valid, we have a hit.
+            if 0.0 <= tmin < nearest_t:
+                nearest_t = tmin
+                hit_obj = boundary
+                hit_point = (ox + dx * tmin, oy + dy * tmin, oz + dz * tmin)
+        # Return the nearest hit time, point, and object
+        if hit_point is None:
+            return None, None, None
+        return nearest_t, hit_point, hit_obj
+
+    def cast_bullet(self, origin: Tuple[float, float, float], direction: Tuple[float, float, float], max_range: float, players: List[Player]):
+        """
+        Raycast against environment and a list of players. Returns (hit_point, hit_boundary, hit_player).
+        """
+        # Environment hit
+        t_env, point_env, obj_env = self.raycast(origin, direction, max_range)
+        nearest_t = t_env if t_env is not None else max_range
+        hit_player = None
+        # Check players
+        for player in players:
+            t_player = player.intersect_ray(origin, direction)
+            if t_player is not None and t_player < nearest_t:
+                nearest_t = t_player
+                hit_player = player
+        # Compute hit point
+        hit_point = (origin[0] + direction[0] * nearest_t,
+                     origin[1] + direction[1] * nearest_t,
+                     origin[2] + direction[2] * nearest_t)
+        # Return hit info
+        if hit_player:
+            return hit_point, None, hit_player
+        if point_env is not None:
+            return hit_point, obj_env, None
+        # Miss
+        return hit_point, None, None
 
 class MapVisualizer:
     """Interactive map visualizer using Pygame library."""
