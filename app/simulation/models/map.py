@@ -1,10 +1,17 @@
+from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional, Any, TYPE_CHECKING
 import json
 import random
 import math
-import pygame
-from app.simulation.models.player import Player
+try:
+    import pygame
+except ImportError:
+    pygame = None
+
+# Use TYPE_CHECKING to avoid circular imports
+if TYPE_CHECKING:
+    from app.simulation.models.player import Player
 
 @dataclass
 class MapArea:
@@ -510,6 +517,8 @@ class Map:
         self.stairs = {}              # Stairs by name
         self.plant_locations = {}     # Bomb plant locations by site name (A, B, C)
         self.default_positions = {}   # Default positions (spawns, etc.)
+        # Dynamic effects currently active on this map
+        self._active_effects: List[Dict] = []
     
     @classmethod
     def from_json(cls, filepath: str) -> 'Map':
@@ -1015,6 +1024,170 @@ class Map:
         marker_area = MapArea(area_name, x, y, 1, 1, elevation)
         self.add_area(marker_area)
 
+    def calculate_player_fov(self, player: 'Player', all_players: List['Player'], 
+                           fov_angle: float = 110.0, max_distance: float = 50.0) -> List['Player']:
+        """
+        Calculate which players are visible within a player's field of vision.
+        
+        Args:
+            player: The player whose FOV we're calculating
+            all_players: List of all players in the game
+            fov_angle: The field of view angle in degrees (default 110°)
+            max_distance: Maximum distance a player can see
+            
+        Returns:
+            List of players visible to the given player
+        """
+        visible_players = []
+        
+        # Skip calculation if player is not alive
+        if not player.alive:
+            return visible_players
+        
+        # Convert player direction from degrees to radians
+        direction_rad = math.radians(player.direction)
+        
+        # Create unit vector for player's facing direction
+        facing_dir = (math.cos(direction_rad), math.sin(direction_rad), 0)
+        
+        # Half of the FOV angle in radians
+        half_fov_rad = math.radians(fov_angle / 2)
+        
+        # Player's position
+        px, py, pz = player.location
+        
+        # Check each other player
+        for other in all_players:
+            # Skip self or dead players
+            if other.id == player.id or not other.alive:
+                continue
+                
+            # Vector from player to other
+            ox, oy, oz = other.location
+            to_other = (ox - px, oy - py, oz - pz)
+            
+            # Distance to other player
+            distance = math.sqrt(to_other[0]**2 + to_other[1]**2 + to_other[2]**2)
+            
+            # Skip if too far away
+            if distance > max_distance:
+                continue
+                
+            # Normalize the to_other vector (for direction comparison)
+            if distance > 0:
+                to_other_normalized = (to_other[0]/distance, to_other[1]/distance, to_other[2]/distance)
+            else:
+                continue  # Skip if at same position (shouldn't happen)
+                
+            # Calculate dot product between facing direction and direction to other player
+            # This gives the cosine of the angle between the vectors
+            dot_product = (facing_dir[0] * to_other_normalized[0] + 
+                           facing_dir[1] * to_other_normalized[1] + 
+                           facing_dir[2] * to_other_normalized[2])
+            
+            # Cosine of half FOV angle
+            cos_half_fov = math.cos(half_fov_rad)
+            
+            # Check if other player is within FOV cone
+            if dot_product >= cos_half_fov:
+                # Now check if line of sight is clear using raycasting
+                hit_distance, hit_point, hit_object = self.raycast(
+                    player.location, 
+                    to_other_normalized, 
+                    distance
+                )
+                
+                # Check if any smoke effects block vision
+                vision_blocked_by_smoke = False
+                for effect in player.utility_active + self._active_effects:
+                    if effect.get("type") == "smoke":
+                        smoke_center = effect.get("position")
+                        smoke_radius = effect.get("radius", 3.0)
+                        if smoke_center:
+                            sx, sy = smoke_center[0], smoke_center[1]
+                            ax, ay = player.location[0], player.location[1]
+                            bx, by = other.location[0], other.location[1]
+                            dx_line = bx - ax
+                            dy_line = by - ay
+                            if dx_line == 0 and dy_line == 0:
+                                dist = math.hypot(sx - ax, sy - ay)
+                            else:
+                                t = ((sx - ax) * dx_line + (sy - ay) * dy_line) / (dx_line*dx_line + dy_line*dy_line)
+                                t = max(0.0, min(1.0, t))
+                                proj_x = ax + t * dx_line
+                                proj_y = ay + t * dy_line
+                                dist = math.hypot(sx - proj_x, sy - proj_y)
+                            if dist <= smoke_radius:
+                                vision_blocked_by_smoke = True
+                                break
+                
+                # If raycast reaches the target distance without hitting a wall
+                # and vision is not blocked by smoke, then the player is visible
+                if (hit_distance is None or hit_distance >= distance) and not vision_blocked_by_smoke:
+                    visible_players.append(other)
+                    
+                    # Check if other player is looking back (for flash effects)
+                    other_direction_rad = math.radians(other.direction)
+                    other_facing = (math.cos(other_direction_rad), math.sin(other_direction_rad), 0)
+                    to_player = (-to_other[0], -to_other[1], -to_other[2])
+                    
+                    if distance > 0:
+                        to_player_normalized = (to_player[0]/distance, to_player[1]/distance, to_player[2]/distance)
+                        looking_back_dot = (other_facing[0] * to_player_normalized[0] +
+                                           other_facing[1] * to_player_normalized[1] +
+                                           other_facing[2] * to_player_normalized[2])
+                        other.is_looking_at_player = (looking_back_dot >= cos_half_fov)
+                    
+        return visible_players
+
+    def update_player_visibility(self, players: List['Player']):
+        """
+        Clear and update each player's visible_enemies based on FOV calculations.
+        """
+        # First, clear all players' visible_enemies
+        for player in players:
+            player.visible_enemies.clear()
+
+        # Then compute and append visible enemies for each player
+        for player in players:
+            visible = self.calculate_player_fov(player, players)
+            for other in visible:
+                if other.team_id != player.team_id:
+                    player.visible_enemies.append(other.id)
+
+    def add_effect(self, effect_type: str, position: Tuple[float, float, float], 
+                 radius: float, duration: float, owner_id: str = None):
+        """
+        Add a dynamic effect to the map (smoke, molly, etc.)
+        
+        Args:
+            effect_type: Type of effect ("smoke", "molly", etc.)
+            position: 3D position of effect
+            radius: Radius of effect
+            duration: How long effect lasts (seconds)
+            owner_id: ID of player who created the effect
+        """
+        self._active_effects.append({
+            "type": effect_type,
+            "position": position,
+            "radius": radius,
+            "duration": duration,
+            "start_time": 0,  # Will be set by simulation
+            "owner_id": owner_id
+        })
+        
+    def update_effects(self, current_time: float):
+        """
+        Update active effects, removing expired ones.
+        
+        Args:
+            current_time: Current simulation time
+        """
+        self._active_effects = [
+            effect for effect in self._active_effects
+            if effect.get("start_time", 0) + effect.get("duration", 0) > current_time
+        ]
+
 class MapVisualizer:
     """Interactive map visualizer using Pygame library."""
     
@@ -1162,6 +1335,8 @@ class MapVisualizer:
     
     def run(self):
         """Initialize and run the pygame visualization."""
+        if pygame:
+            import pygame
         pygame.init()
         screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption(f"VCT Map: {self.map_data['metadata']['name']}")

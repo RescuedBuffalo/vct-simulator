@@ -30,6 +30,7 @@ class Player:
     is_defusing: bool = False
     plant_progress: float = 0.0  # Time spent planting so far
     defuse_progress: float = 0.0  # Time spent defusing so far
+    is_looking_at_player: bool = False  # Whether player is currently looking at another player (for flash effects)
     
     # Movement physics
     velocity: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # (vx, vy, vz) in units per second
