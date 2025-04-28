@@ -315,8 +315,8 @@ class Blackboard:
     
     def _position_to_area_id(self, position: Tuple[float, float]) -> str:
         """Convert a position to an area ID (simplified)."""
-        # This would use actual map data in a real implementation
-        x, y = position
+        # Accept both 2D and 3D tuples, use only x and y
+        x, y = position[:2]
         # Placeholder implementation - divide map into quadrants
         x_part = "east" if x > 0 else "west"
         y_part = "north" if y > 0 else "south"

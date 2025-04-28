@@ -1017,7 +1017,7 @@ class Round:
             is_jumping = False
             
             # Check if player needs to jump to get over obstacles
-            current_x, current_y = player.location
+            current_x, current_y = player.location[:2]
             desired_x = current_x + movement_dir[0]
             desired_y = current_y + movement_dir[1]
             
@@ -1041,6 +1041,10 @@ class Round:
             # Update player movement using physics system
             player.update_movement(time_step, game_map)
             
+            # Weapon pickup logic: only allowed during round phase (not buy phase)
+            if self.phase == RoundPhase.ROUND:
+                self._attempt_pickup_weapon(player)
+            
             # Check if player has fallen outside map bounds (safety check)
             if player.z_position < -10.0:  # If player has fallen far below the map
                 # Reset player to a safe position
@@ -1050,6 +1054,25 @@ class Round:
                     player.z_position = safe_pos[2]
                     player.velocity = (0.0, 0.0)
                     player.z_velocity = 0.0
+    
+    def _attempt_pickup_weapon(self, player):
+        """Allow a player to pick up a dropped weapon if close enough and doesn't already have one (or swaps)."""
+        pickup_radius = 1.5  # Distance within which a weapon can be picked up
+        px, py = player.location[:2]
+        weapon_to_remove = None
+        for dropped in self.dropped_weapons:
+            dx, dy = dropped.position[:2]
+            dist = math.sqrt((px - dx) ** 2 + (py - dy) ** 2)
+            if dist <= pickup_radius:
+                # If player already has a weapon, drop it at their current location
+                if player.weapon:
+                    self._drop_weapon(player.id, player.weapon, (px, py))
+                # Pick up the dropped weapon
+                player.weapon = dropped.weapon_type
+                weapon_to_remove = dropped
+                break
+        if weapon_to_remove:
+            self.dropped_weapons.remove(weapon_to_remove)
     
     def _find_safe_position_for_player(self, player_id: str) -> Optional[Tuple[float, float, float]]:
         """Find a safe position to reset a player who has fallen out of bounds."""
