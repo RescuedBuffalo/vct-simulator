@@ -397,3 +397,90 @@ def test_integration_round_setup_and_buy():
         assert player.shield in (None, 'light', 'heavy')
     # Round should now be in ROUND phase
     assert round_obj.phase == RoundPhase.ROUND 
+
+def test_match_overtime():
+    """Test that match correctly enters and resolves overtime."""
+    from app.simulation.models.match import Match
+    from app.simulation.models.map import Map
+    from app.simulation.models.round import Round
+    from app.simulation.models.round import RoundWinner
+    from app.simulation.models.team import Team
+    from app.simulation.models.player import Player
+    from app.simulation.models.blackboard import Blackboard
+    # Minimal map and player setup
+    map_data = {
+        "attacker_spawns": [(0.0, 0.0, 0.0)],
+        "defender_spawns": [(10.0, 0.0, 0.0)],
+        "walls": {},
+        "plant_sites": {},
+    }
+    # Create 5 attackers and 5 defenders
+    players = {}
+    attacker_ids = []
+    defender_ids = []
+    for i in range(5):
+        p = Player(id=f"a{i}", name=f"A{i}", team_id="attackers", role="duelist", agent="Jett", aim_rating=50, reaction_time=200, movement_accuracy=50, spray_control=50, clutch_iq=50)
+        players[p.id] = p
+        attacker_ids.append(p.id)
+    for i in range(5):
+        p = Player(id=f"d{i}", name=f"D{i}", team_id="defenders", role="sentinel", agent="Sage", aim_rating=50, reaction_time=200, movement_accuracy=50, spray_control=50, clutch_iq=50)
+        players[p.id] = p
+        defender_ids.append(p.id)
+    # Ensure each player has abilities and creds for carryover logic
+    for p in players.values():
+        p.abilities = DummyAbility()
+        p.creds = 0
+    # Create teams
+    team_a = Team(id="attackers", name="Attackers", players=[players[pid] for pid in attacker_ids])
+    team_b = Team(id="defenders", name="Defenders", players=[players[pid] for pid in defender_ids])
+    # Create initial round
+    round_obj = Round(
+        round_number=1,
+        players=players,
+        attacker_ids=attacker_ids,
+        defender_ids=defender_ids,
+        map_data=map_data,
+        attacker_blackboard=Blackboard("attackers"),
+        defender_blackboard=Blackboard("defenders"),
+    )
+    # Patch the round's simulate method to alternate wins to reach 12-12, then test overtime
+    win_pattern = (["attackers", "defenders"] * 12)[:24]
+    win_iter = iter(win_pattern)
+    orig_simulate = round_obj.simulate
+    def fake_simulate(*args, **kwargs):
+        winner_str = next(win_iter, None)
+        if winner_str is None:
+            # Overtime: attackers always win until a 2-round lead
+            if team_a.stats.rounds_won <= team_b.stats.rounds_won:
+                winner_str = "attackers"
+            else:
+                winner_str = "defenders"
+        # Set round_obj.round_winner to the correct enum
+        if winner_str == "attackers":
+            round_obj.round_winner = RoundWinner.ATTACKERS
+        else:
+            round_obj.round_winner = RoundWinner.DEFENDERS
+        return {"winner": winner_str}
+    # Monkey-patch Round.simulate for all instances (including future ones) to use fake_simulate
+    from app.simulation.models.round import Round as RoundClass
+    RoundClass.simulate = fake_simulate
+    # Also patch the initial instance
+    round_obj.simulate = fake_simulate
+    # Create a dummy Map object
+    class DummyMap:
+        pass
+    # Monkey-patch carryover to remove 'abilities' key (Player.abilities may not exist)
+    from app.simulation.models.round import Round as RoundClass
+    orig_get_carry = RoundClass.get_carryover_state
+    def fake_get_carry(self, *args, **kwargs):
+        carry = orig_get_carry(self, *args, **kwargs)
+        for state in carry.values():
+            state.pop("abilities", None)
+        return carry
+    RoundClass.get_carryover_state = fake_get_carry
+    match = Match(DummyMap(), round_obj, team_a, team_b)
+    match.run()
+    # After run, check that match went into overtime by playing beyond regulation rounds
+    assert match.current_round > 24, "Match should enter overtime (play more than 24 rounds)."
+    assert abs(match.team_a_score - match.team_b_score) >= 2, "Match should end with a 2-round lead in overtime."
+    assert match.team_a_score >= 13 or match.team_b_score >= 13, "Final score should be at least 13 for the winner." 

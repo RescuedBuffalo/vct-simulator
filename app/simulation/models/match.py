@@ -46,7 +46,7 @@ class Match:
         self.is_overtime = False
         self.current_round = 1
         max_rounds = MAX_REGULAR_ROUNDS
-
+        overtime_active = False
         # Prepare player state references
         players = self.round.players
         attacker_ids = self.round.attacker_ids
@@ -55,15 +55,32 @@ class Match:
         attacker_blackboard = self.round.attacker_blackboard
         defender_blackboard = self.round.defender_blackboard
 
-        while self.team_a_score < ROUNDS_TO_WIN and self.team_b_score < ROUNDS_TO_WIN and self.current_round <= max_rounds:
+        while True:
+            # Regulation end or win conditions
+            if not self.is_overtime:
+                # Win in regulation
+                if self.team_a_score >= ROUNDS_TO_WIN or self.team_b_score >= ROUNDS_TO_WIN:
+                    break
+                # Regulation rounds exhausted
+                if self.current_round > max_rounds:
+                    # If tied at regulation end, enter overtime
+                    if self.team_a_score == self.team_b_score:
+                        self.is_overtime = True
+                        # add overtime frames
+                        max_rounds = self.current_round + OVERTIME_ROUNDS
+                    else:
+                        break
+            else:
+                # In overtime: need a 2-round lead and at least 13 rounds
+                if abs(self.team_a_score - self.team_b_score) >= 2 and (self.team_a_score >= ROUNDS_TO_WIN or self.team_b_score >= ROUNDS_TO_WIN):
+                    break
+
             # Reset abilities and ultimates for both teams at round start
             self.team_a.reset_abilities_and_ultimates()
             self.team_b.reset_abilities_and_ultimates()
-            
             # Run the round
             round_result = self.round.simulate()
             self.round_results[self.current_round] = self.round.get_round_summary()
-
             # Update scores
             if round_result["winner"] == "attackers":
                 if self.current_half == 1:
@@ -83,7 +100,6 @@ class Match:
                     self.team_a_score += 1
                     self.loss_streak_a = 0
                     self.loss_streak_b += 1
-
             # Update player carryover state and credits
             carryover = self.round.get_carryover_state(
                 loss_bonus_attackers=1900 + min(self.loss_streak_a, 4) * 500,
@@ -91,13 +107,10 @@ class Match:
             )
             for pid, state in carryover.items():
                 player = players[pid]
-                # Update credits
                 player.creds += state["round_credits"]
-                # Reset weapon/shield if dead
                 if not state["alive"]:
                     player.weapon = None
                     player.shield = None
-                # Reset health, status, etc.
                 player.health = 100
                 player.status_effects = []
                 player.alive = True
@@ -106,12 +119,8 @@ class Match:
                 player.is_defusing = False
                 player.plant_progress = 0.0
                 player.defuse_progress = 0.0
-                # Optionally reset ability charges here
-
-            # Increment ult points for round events (kills, plants, defuses)
             for pid, state in carryover.items():
                 player = players[pid]
-                # 1 point for plant, defuse, or kill (typical Valorant rules)
                 if state["plants"] > 0:
                     if pid in self.team_a.alive_players:
                         self.team_a.increment_player_ult(pid)
@@ -127,19 +136,19 @@ class Match:
                         self.team_a.increment_player_ult(pid, state["kills"])
                     else:
                         self.team_b.increment_player_ult(pid, state["kills"])
-
             # Side switch at halftime
             if self.current_round == halftime_round:
                 self._switch_sides(players, attacker_ids, defender_ids)
                 self.current_half += 1
-
             # Overtime logic
             if self.team_a_score == 12 and self.team_b_score == 12 and not self.is_overtime:
                 self.is_overtime = True
-                max_rounds += OVERTIME_ROUNDS  # Add overtime rounds
-
+                overtime_active = True
+                max_rounds = self.current_round + OVERTIME_ROUNDS
+            # If in overtime and both teams tied after OVERTIME_ROUNDS, add more rounds
+            if self.is_overtime and (self.current_round - halftime_round) % OVERTIME_ROUNDS == 0 and self.team_a_score == self.team_b_score:
+                max_rounds += OVERTIME_ROUNDS
             self.current_round += 1
-            # Prepare next round (create new Round object with updated player states)
             self.round = Round(
                 round_number=self.current_round,
                 players=players,
@@ -149,6 +158,10 @@ class Match:
                 attacker_blackboard=attacker_blackboard,
                 defender_blackboard=defender_blackboard
             )
+
+        # After match ends, mark overtime if extra rounds were played
+        if self.current_round > MAX_REGULAR_ROUNDS:
+            self.is_overtime = True
 
     def _switch_sides(self, players, attacker_ids, defender_ids):
         # Swap attacker/defender roles for teams and players
