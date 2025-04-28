@@ -516,23 +516,29 @@ class Map:
         self.ramps = {}               # Ramps by name
         self.stairs = {}              # Stairs by name
         self.plant_locations = {}     # Bomb plant locations by site name (A, B, C)
-        self.default_positions = {}   # Default positions (spawns, etc.)
+        self.bomb_sites = {}          # Bomb sites by name (A, B, C)
+        self.attacker_spawns = []     # List of attacker spawn points
+        self.defender_spawns = []     # List of defender spawn points
         # Dynamic effects currently active on this map
         self._active_effects: List[Dict] = []
     
     @classmethod
-    def from_json(cls, filepath: str) -> 'Map':
-        """Load a map from a JSON file."""
-        with open(filepath, 'r') as f:
-            data = json.load(f)
-        
-        # Create the map
+    def from_json(cls, data) -> 'Map':
+        """Load a map from a dictionary or a file path."""
+        import os
+        import json
+        if isinstance(data, str):
+            # Assume it's a file path
+            if not os.path.exists(data):
+                raise FileNotFoundError(f"Map file not found: {data}")
+            with open(data, 'r') as f:
+                print(f"[DEBUG] Loading map from.")
+                data = json.load(f)
+        # Now data is a dict
         metadata = data.get("metadata", {})
         map_size = metadata.get("map-size", [32, 32])
         name = metadata.get("name", "Unknown Map")
-        
         game_map = cls(name, map_size[0], map_size[1])
-        
         # Load map areas
         for name, area_data in data.get("map-areas", {}).items():
             game_map.areas[name] = MapBoundary(
@@ -541,55 +547,51 @@ class Map:
                 "area", name, area_data.get("elevation", 0),
                 area_data.get("z", 0), area_data.get("height_z", 0)
             )
-        
         # Load walls
         for name, wall_data in data.get("walls", {}).items():
             game_map.walls[name] = MapBoundary(
                 wall_data["x"], wall_data["y"], 
                 wall_data["w"], wall_data["h"],
                 "wall", name, wall_data.get("elevation", 0),
-                wall_data.get("z", 0), wall_data.get("height_z", 3.0)  # Default wall height
+                wall_data.get("z", 0), wall_data.get("height_z", 3.0)
             )
-        
         # Load objects
         for name, obj_data in data.get("objects", {}).items():
-            if name != "instructions":  # Skip instruction entries
+            if name != "instructions":
                 game_map.objects[name] = MapBoundary(
                     obj_data["x"], obj_data["y"], 
                     obj_data["w"], obj_data["h"],
                     "object", name, obj_data.get("elevation", 0),
-                    obj_data.get("z", 0), obj_data.get("height_z", 1.0)  # Default object height
+                    obj_data.get("z", 0), obj_data.get("height_z", 1.0)
                 )
-        
         # Load stairs
         for name, stair_data in data.get("stairs", {}).items():
             game_map.stairs[name] = MapBoundary(
                 stair_data["x"], stair_data["y"], 
                 stair_data["w"], stair_data["h"],
                 "stairs", name, stair_data.get("elevation", 0),
-                stair_data.get("z", 0), stair_data.get("height_z", 0.5)  # Default stair height
+                stair_data.get("z", 0), stair_data.get("height_z", 0.5)
             )
-        
-        # Load ramps (for smoother elevation changes)
+        # Load ramps
         for name, ramp_data in data.get("ramps", {}).items():
             game_map.ramps[name] = MapBoundary(
                 ramp_data["x"], ramp_data["y"], 
                 ramp_data["w"], ramp_data["h"],
                 "ramp", name, ramp_data.get("elevation", 0),
-                ramp_data.get("z_start", 0), ramp_data.get("z_end", 1.0)  # Ramp from z_start to z_end
+                ramp_data.get("z_start", 0), ramp_data.get("z_end", 1.0)
             )
-            # Store direction information for the ramp
             game_map.ramps[name].direction = ramp_data.get("direction", "north")
-        
         # Load bomb sites
-        for name, site_data in data.get("bomb-sites", {}).items():
-            game_map.bomb_sites[name] = MapBoundary(
-                site_data["x"], site_data["y"], 
-                site_data["w"], site_data["h"],
-                "bomb-site", name, site_data.get("elevation", 0),
-                site_data.get("z", 0), site_data.get("height_z", 0.0)
-            )
-        
+        bomb_sites_data = data.get("bomb-sites", {})
+        if isinstance(bomb_sites_data, dict):
+            for name, site_data in bomb_sites_data.items():
+                game_map.bomb_sites[name] = MapBoundary(
+                    site_data["x"], site_data["y"], 
+                    site_data["w"], site_data["h"],
+                    "bomb-site", name, site_data.get("elevation", 0),
+                    site_data.get("z", 0), site_data.get("height_z", 0.0)
+                )
+        # If bomb-sites is a list (legacy), do nothing (handled elsewhere)
         return game_map
     
     def get_area_at_position(self, x: float, y: float, z: float = 0.0) -> Optional[str]:
@@ -640,6 +642,7 @@ class Map:
     def is_within_bomb_site(self, x: float, y: float, z: float = 0.0) -> Optional[str]:
         """Check if a position is within a bomb site."""
         for name, site in self.bomb_sites.items():
+            print(f"[DEBUG] Checking if {x}, {y}, {z} is within {name} with type {type(site)}")
             if site.contains_point(x, y, z):
                 return name
         return None

@@ -1,24 +1,28 @@
-from typing import Dict, List, Optional, Tuple, Any, Union, Set
+from __future__ import annotations
+from enum import Enum
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING
 import random
 import math
-from dataclasses import dataclass, field
-from enum import Enum
+import time as time_module
 
-from .player import Player
-from .map import MapLayout, MapArea
-from .blackboard import Blackboard
-from .ability import AbilityInstance, AbilityType, AbilityTarget
+from app.simulation.models.player import Player
+from app.simulation.models.blackboard import Blackboard
+from app.simulation.models.ability import AbilityInstance
+
+# Import Map for typing but avoid circular imports
+if TYPE_CHECKING:
+    from app.simulation.models.map import Map
 
 # Constants
 ROUND_TIMER = 100  # seconds
-SPIKE_TIMER = 45  # seconds after plant
-BUY_PHASE_TIMER = 30  # seconds
-FIRST_ROUND_BUY_PHASE_TIMER = 45  # seconds
-POST_ROUND_TIMER = 5  # seconds
+BUY_PHASE_TIMER = 20  # seconds
+FIRST_ROUND_BUY_PHASE_TIMER = 30  # seconds
+SPIKE_TIMER = 45  # seconds
+DEFUSE_TIME = 7  # seconds
+PLANT_TIME = 4  # seconds
 
 # Combat constants
-PLANT_TIME = 4.0  # seconds to plant the spike
-DEFUSE_TIME = 7.0  # seconds to defuse the spike
 HALF_DEFUSE_TIME = 3.5  # seconds for half defuse
 
 # Sound visibility ranges (in game distance units)
@@ -123,7 +127,15 @@ class RoundResult:
 
 class Round:
     """
-    Simulates a single round of a match.
+    Simulates a single round of a tactical FPS match.
+    
+    This class handles all round mechanics including:
+    - Player movement and positioning
+    - Spike planting and defusing
+    - Combat and utility usage
+    - Round state progression and resolution
+    
+    The Round class now uses a Map object for all map-related operations.
     """
     def __init__(
         self,
@@ -131,18 +143,99 @@ class Round:
         players: Dict[str, Player],
         attacker_ids: List[str],
         defender_ids: List[str],
-        map_data: Dict,
+        map_data: Dict = None,
         attacker_blackboard: Blackboard = None,
         defender_blackboard: Blackboard = None,
         seed: Optional[int] = None,
         loss_bonus_attackers: int = 1900,
         loss_bonus_defenders: int = 1900,
+        map_obj: Optional['Map'] = None,
     ):
+        """
+        Initialize a new round simulation.
+        
+        Args:
+            round_number: The round number in the match
+            players: Dictionary of players by ID
+            attacker_ids: List of IDs for attacking team players
+            defender_ids: List of IDs for defending team players
+            map_data: Legacy map data dictionary (will be used to create a Map object if map_obj not provided)
+            attacker_blackboard: Blackboard for attacker team or None to create a new one
+            defender_blackboard: Blackboard for defender team or None to create a new one
+            seed: Random seed for deterministic simulation
+            loss_bonus_attackers: Economy bonus for attackers if they lost previous round
+            loss_bonus_defenders: Economy bonus for defenders if they lost previous round
+            map_obj: Map object to use (preferred over map_data if provided)
+        """
         self.round_number = round_number
         self.players = players
         self.attacker_ids = attacker_ids
         self.defender_ids = defender_ids
-        self.map_data = map_data
+        self.map_data = map_data  # Store map_data for backward compatibility
+        
+        # Handle map data - support both Map object and legacy map_data dictionary
+        if map_obj is not None:
+            self.map = map_obj
+        else:
+            # For backwards compatibility: use map_data and create a Map object
+            try:
+                from app.simulation.models.map import Map
+                if map_data:
+                    map_size = map_data.get("metadata", {}).get("map-size", [32, 32])
+                    self.map = Map(map_data.get("metadata", {}).get("name", "Unknown"), 
+                                  map_size[0], map_size[1])
+                    
+                    # Load map areas, walls, etc. from map_data into the Map object
+                    for name, area_data in map_data.get("map-areas", {}).items():
+                        self.map.areas[name] = {
+                            "x": area_data["x"],
+                            "y": area_data["y"],
+                            "w": area_data["w"],
+                            "h": area_data["h"],
+                            "z": area_data.get("z", 0)
+                        }
+                    
+                    for name, wall_data in map_data.get("walls", {}).items():
+                        self.map.walls[name] = {
+                            "x": wall_data["x"],
+                            "y": wall_data["y"],
+                            "w": wall_data["w"],
+                            "h": wall_data["h"],
+                            "z": wall_data.get("z", 0)
+                        }
+                    
+                    # Add objects and other collision elements
+                    for name, obj_data in map_data.get("objects", {}).items():
+                        if name != "instructions":
+                            self.map.objects[name] = {
+                                "x": obj_data["x"],
+                                "y": obj_data["y"],
+                                "w": obj_data["w"],
+                                "h": obj_data["h"],
+                                "z": obj_data.get("z", 0)
+                            }
+                    
+                    # Copy bomb sites
+                    for name, site_data in map_data.get("bomb-sites", {}).items():
+                        self.map.bomb_sites[name] = {
+                            "x": site_data["x"],
+                            "y": site_data["y"],
+                            "w": site_data["w"],
+                            "h": site_data["h"],
+                            "z": site_data.get("z", 0)
+                        }
+                        
+                    # Copy spawn points
+                    self.map.attacker_spawns = map_data.get("attacker_spawns", [])
+                    self.map.defender_spawns = map_data.get("defender_spawns", [])
+                else:
+                    # Create a default map if none provided
+                    self.map = Map("Default", 32, 32)
+            except (ImportError, Exception) as e:
+                # Map object creation failed, create empty map
+                from app.simulation.models.map import Map
+                self.map = Map("Default", 32, 32)
+                print(f"Warning: Map object creation failed: {str(e)}")
         
         # Initialize or use provided blackboards for each team
         self.attacker_blackboard = attacker_blackboard if attacker_blackboard else Blackboard("attackers")
@@ -240,98 +333,65 @@ class Round:
         self.players[spike_carrier_id].spike = True
     
     def _initialize_player_positions(self) -> None:
-        """Set initial positions for all players based on map data."""
-        # Position attackers at attacker spawn points
-        attacker_spawns = self.map_data.get("attacker_spawns", [])
+        """Set up initial positions for all players."""
+        # Ensure attacker/defender arrays exist
+        if not hasattr(self.map, 'attacker_spawns') or not self.map.attacker_spawns:
+            self.map.attacker_spawns = [(2, 2)] * len(self.attacker_ids)
+        
+        if not hasattr(self.map, 'defender_spawns') or not self.map.defender_spawns:
+            self.map.defender_spawns = [(28, 28)] * len(self.defender_ids)
+        
+        # Make sure we have enough spawn points (duplicate if necessary)
+        while len(self.map.attacker_spawns) < len(self.attacker_ids):
+            self.map.attacker_spawns.append(self.map.attacker_spawns[0])
+        
+        while len(self.map.defender_spawns) < len(self.defender_ids):
+            self.map.defender_spawns.append(self.map.defender_spawns[0])
+        
+        # Shuffle spawn points
+        random.shuffle(self.map.attacker_spawns)
+        random.shuffle(self.map.defender_spawns)
+        
+        # Set attacker positions
         for i, player_id in enumerate(self.attacker_ids):
-            spawn_idx = i % len(attacker_spawns) if attacker_spawns else 0
-            spawn_position = attacker_spawns[spawn_idx] if attacker_spawns else (0.0, 0.0, 0.0)
-            # Ensure spawn_position is 3D
-            if len(spawn_position) == 2:
-                spawn_position = (spawn_position[0], spawn_position[1], 0.0)
-            # Add some randomness to avoid players on exact same spot
-            jitter_x = random.uniform(-1.0, 1.0)
-            jitter_y = random.uniform(-1.0, 1.0)
-            x = spawn_position[0] + jitter_x
-            y = spawn_position[1] + jitter_y
-            z = spawn_position[2]
-            self.players[player_id].location = (x, y, z)
-            self.players[player_id].direction = 0.0  # Face forward
-        # Position defenders at defender spawn points
-        defender_spawns = self.map_data.get("defender_spawns", [])
+            spawn = self.map.attacker_spawns[i % len(self.map.attacker_spawns)]
+            self.players[player_id].x = spawn[0]
+            self.players[player_id].y = spawn[1]
+            # self.players[player_id].set_position(spawn[0], spawn[1], 0.0)
+            self.players[player_id].location = (spawn[0], spawn[1], 0.0)
+        
+        # Set defender positions
         for i, player_id in enumerate(self.defender_ids):
-            spawn_idx = i % len(defender_spawns) if defender_spawns else 0
-            spawn_position = defender_spawns[spawn_idx] if defender_spawns else (0.0, 0.0, 0.0)
-            # Ensure spawn_position is 3D
-            if len(spawn_position) == 2:
-                spawn_position = (spawn_position[0], spawn_position[1], 0.0)
-            # Add some randomness to avoid players on exact same spot
-            jitter_x = random.uniform(-1.0, 1.0)
-            jitter_y = random.uniform(-1.0, 1.0)
-            x = spawn_position[0] + jitter_x
-            y = spawn_position[1] + jitter_y
-            z = spawn_position[2]
-            self.players[player_id].location = (x, y, z)
-            self.players[player_id].direction = 180.0  # Face opposite direction
+            spawn = self.map.defender_spawns[i % len(self.map.defender_spawns)]
+            self.players[player_id].x = spawn[0]
+            self.players[player_id].y = spawn[1]
+            # self.players[player_id].set_position(spawn[0], spawn[1], 0.0)
+            self.players[player_id].location = (spawn[0], spawn[1], 0.0)
     
     def simulate(self, time_step: float = 0.5) -> Dict:
         """
-        Run the round simulation until it ends.
-        Returns the round results including winner and player stats.
+        Simulate the round forward until it ends.
         """
-        while self.round_winner == RoundWinner.NONE:
+        while self.phase != RoundPhase.END:
             self.update(time_step)
-            
-        # Collect round stats
-        round_results = {
-            "round_number": self.round_number,
-            "winner": self.round_winner.value,
-            "end_condition": self.round_end_condition.value if self.round_end_condition else None,
-            "duration": self.tick,
+        # Get living players on each team
+        alive_attackers = sum(1 for pid in self.attacker_ids if self.players[pid].alive)
+        alive_defenders = sum(1 for pid in self.defender_ids if self.players[pid].alive)
+        # Determine winner
+        winner = self.round_winner
+        # Provide round summary
+        round_summary = {
+            "phase": self.phase.value,
+            "time_remaining": self.round_time_remaining,
             "spike_planted": self.spike_planted,
-            "player_stats": {},
+            "spike_time_remaining": self.spike_time_remaining,
+            "alive_attackers": alive_attackers,
+            "alive_defenders": alive_defenders,
+            "winner": winner.value if winner else RoundWinner.NONE.value,
+            "end_condition": self.round_end_condition.value if self.round_end_condition else None,
+            "kill_count": self.kill_count
         }
-        
-        # Add player stats
-        for player_id, player in self.players.items():
-            round_results["player_stats"][player_id] = {
-                "kills": player.kills,
-                "deaths": player.deaths,
-                "assists": player.assists,
-                "plants": player.plants,
-                "defuses": player.defuses,
-            }
-        
-        # Record round result in blackboards
-        attacker_won = self.round_winner == RoundWinner.ATTACKERS
-        defender_won = self.round_winner == RoundWinner.DEFENDERS
-        end_condition = self.round_end_condition.value if self.round_end_condition else "unknown"
-        
-        # Determine site if spike was planted
-        site = None
-        if self.spike_position:
-            # Determine which site the spike was at
-            for site_name, site_info in self.map_data.get("plant_sites", {}).items():
-                if self._calculate_distance(self.spike_position, site_info.get("center", (0, 0))) <= site_info.get("radius", 10.0):
-                    site = site_name
-                    break
-        
-        # Record in both blackboards
-        self.attacker_blackboard.record_round_result(
-            self.round_number, 
-            attacker_won, 
-            end_condition, 
-            site
-        )
-        
-        self.defender_blackboard.record_round_result(
-            self.round_number, 
-            defender_won, 
-            end_condition, 
-            site
-        )
-            
-        return round_results
+        return round_summary
 
     def update(self, time_step: float) -> None:
         """Update the round state by one time step."""
@@ -339,13 +399,10 @@ class Round:
         
         # Update phase
         if self.phase == RoundPhase.BUY:
-            print(f"[DEBUG] update: Round {self.round_number} in buy phase.")
             self._process_buy_phase(time_step)
         elif self.phase == RoundPhase.ROUND:
-            print(f"[DEBUG] update: Round {self.round_number} in progress.")
             self._process_round_phase(time_step)
         elif self.phase == RoundPhase.END:
-            print(f"[DEBUG] update: Round {self.round_number} in end phase.")
             # Nothing to do in end phase
             pass
             
@@ -536,33 +593,32 @@ class Round:
                     self.defender_blackboard.add_warning(f"Rotate to {most_active_site} - enemy activity detected")
     
     def _position_to_site(self, position: Tuple[float, float]) -> Optional[str]:
-        """Determine which site (if any) a position is nearest to."""
-        pos2d = position[:2] if len(position) >= 2 else position
-        for site_name, site_info in self.map_data.get("plant_sites", {}).items():
-            center = site_info.get("center", (0, 0))
-            center2d = center[:2] if len(center) >= 2 else center
-            radius = site_info.get("radius", 10.0)
-            if self._calculate_distance(pos2d, center2d) <= radius * 1.5:
-                return site_name
-        return None
+        """
+        Determine which site (if any) a position is in.
+        """
+        if not position:
+            return None
+        # Accept both 2D and 3D tuples
+        x, y = position[:2]
+        return self.map.is_within_bomb_site(x, y)
+    
+    def _is_at_plant_site(self, location: Tuple[float, float]) -> bool:
+        """Check if a location is within any bomb site."""
+        return self._position_to_site(location) is not None
     
     def _process_spike_actions(self, time_step: float) -> None:
         """Handle spike-related actions such as planting and defusing."""
         # Handle spike planting
-        print(f"[DEBUG] _process_spike_actions: spike_planted={self.spike_planted}")
         for player_id in self.attacker_ids:
             player = self.players[player_id]
             if not player.alive or not player.spike:
                 continue
             at_plant_site = self._is_at_plant_site(player.location)
-            print(f"[DEBUG] _process_spike_actions: at_plant_site={at_plant_site}, player.is_planting={player.is_planting}, self.spike_planted={self.spike_planted}")
             if at_plant_site and not player.is_planting and not self.spike_planted:
                 player.start_plant(self)
             if player.is_planting and at_plant_site:
                 player.plant_progress += time_step
-                print(f"[DEBUG] _process_spike_actions: player.plant_progress={player.plant_progress}")
                 if player.plant_progress >= PLANT_TIME:
-                    print(f"[DEBUG] _process_spike_actions: player.plant_progress={player.plant_progress}, PLANT_TIME={PLANT_TIME}")
                     self.spike_planted = True
                     self.spike_plant_time = self.tick
                     self.spike_position = player.location
@@ -619,24 +675,7 @@ class Round:
                         self.attacker_blackboard.update_spike_info(**spike_info)
                         self.defender_blackboard.update_spike_info(**spike_info)
                 if player.is_defusing and not at_spike:
-                    print(f"[DEBUG] {player_id} canceled defusing (moved away)")
                     player.stop_defuse(self)
-    
-    def _is_at_plant_site(self, location: Tuple[float, float]) -> bool:
-        """Check if the location is at a valid plant site."""
-        loc2d = location[:2] if len(location) >= 2 else location
-        plant_sites = self.map_data.get("plant_sites", {})
-        for site in plant_sites.values():
-            site_center = site.get("center", (0, 0))
-            center2d = site_center[:2] if len(site_center) >= 2 else site_center
-            site_radius = site.get("radius", 10.0)
-            distance = self._calculate_distance(loc2d, center2d)
-            print(f"[DEBUG] _is_at_plant_site: loc2d={loc2d}, center2d={center2d}, radius={site_radius}, distance={distance}")
-            if distance <= site_radius:
-                print(f"[DEBUG] _is_at_plant_site: INSIDE site (distance {distance} <= {site_radius})")
-                return True
-        print(f"[DEBUG] _is_at_plant_site: NOT at any site")
-        return False
     
     def _is_near_spike(self, location: Tuple[float, float]) -> bool:
         """Check if the location is near the planted spike."""
@@ -645,7 +684,6 @@ class Round:
         loc2d = location[:2] if len(location) >= 2 else location
         spike2d = self.spike_position[:2] if len(self.spike_position) >= 2 else self.spike_position
         distance = self._calculate_distance(loc2d, spike2d)
-        print(f"[DEBUG] _is_near_spike: loc2d={loc2d}, spike2d={spike2d}, distance={distance}")
         return distance <= 3.0  # Defuse range
     
     def _calculate_distance(self, point1: Tuple[float, ...], point2: Tuple[float, ...]) -> float:
@@ -721,15 +759,30 @@ class Round:
                     team_blackboard.update_spike_info(**spike_info)
     
     def _has_line_of_sight(self, source: Tuple[float, float], target: Tuple[float, float]) -> bool:
-        """Check if there is a clear line of sight between two points."""
-        # Simplified implementation - check for walls in the map data
-        walls = self.map_data.get("walls", [])
+        """
+        Check if there is a clear line of sight between source and target.
         
-        for wall in walls:
-            if self._line_intersects_wall(source, target, wall):
-                return False
-                
-        return True
+        Args:
+            source: (x, y) position of source
+            target: (x, y) position of target
+            
+        Returns:
+            True if there is line of sight, False otherwise
+        """
+        if hasattr(self.map, "raycast"):
+            # Use the Map's raycast function if available
+            hit_distance, hit_point, hit_boundary = self.map.raycast(
+                (source[0], source[1], 0.0),  # source with z=0
+                (target[0] - source[0], target[1] - source[1], 0.0),  # direction vector
+                self._calculate_distance(source, target) + 0.1  # max distance slightly beyond target
+            )
+            return hit_boundary is None or hit_distance is None
+        else:
+            # Fallback to simplified line of sight check
+            for wall in self.map.walls.values():
+                if self._line_intersects_wall(source, target, wall):
+                    return False
+            return True
     
     def _line_intersects_wall(
         self, source: Tuple[float, float], target: Tuple[float, float], wall: Dict
@@ -885,11 +938,9 @@ class Round:
         if random_factor < player1_win_prob:
             # Player 1 wins
             self._handle_player_death(player2_id, player1_id)
-            print(f"[DEBUG] _simulate_duel: Player 1 wins.")
         else:
             # Player 2 wins
             self._handle_player_death(player1_id, player2_id)
-            print(f"[DEBUG] _simulate_duel: Player 2 wins.")
     
     def _calculate_combat_advantage(self, player_id: str, opponent_id: str) -> float:
         """Calculate a player's combat advantage against an opponent."""
@@ -1133,98 +1184,126 @@ class Round:
             self.dropped_shields.remove(shield_to_remove)
     
     def _find_safe_position_for_player(self, player_id: str) -> Optional[Tuple[float, float, float]]:
-        """Find a safe position to reset a player who has fallen out of bounds."""
-        player = self.players[player_id]
+        """Find a safe starting position for a player in case of collision or validation issues."""
         is_attacker = player_id in self.attacker_ids
+        spawn = None
         
-        # Check if player is in a team
-        if is_attacker and self.attacker_ids:
-            # Find a nearby teammate
-            for teammate_id in self.attacker_ids:
-                if teammate_id != player_id and self.players[teammate_id].alive:
-                    teammate = self.players[teammate_id]
-                    return (teammate.location[0], teammate.location[1], teammate.z_position)
-        elif not is_attacker and self.defender_ids:
-            # Find a nearby teammate
-            for teammate_id in self.defender_ids:
-                if teammate_id != player_id and self.players[teammate_id].alive:
-                    teammate = self.players[teammate_id]
-                    return (teammate.location[0], teammate.location[1], teammate.z_position)
+        # Try to use team-appropriate spawn
+        if self.map:
+            if is_attacker and self.map.attacker_spawns:
+                spawn = random.choice(self.map.attacker_spawns)
+            elif not is_attacker and self.map.defender_spawns:
+                spawn = random.choice(self.map.defender_spawns)
+        else:
+            # Legacy fallback
+            if is_attacker and self.map_data.get("attacker_spawns"):
+                spawn = random.choice(self.map_data["attacker_spawns"])
+            elif not is_attacker and self.map_data.get("defender_spawns"):
+                spawn = random.choice(self.map_data["defender_spawns"])
+            
+        # If no spawn found, use center of map
+        if not spawn:
+            if self.map:
+                spawn = (self.map.width / 2, self.map.height / 2, 0)
+            else:
+                map_size = self.map_data.get("metadata", {}).get("map-size", [32, 32])
+                spawn = (map_size[0] / 2, map_size[1] / 2, 0)
+            
+        # Ensure 3D coordinates
+        if len(spawn) == 2:
+            spawn = (spawn[0], spawn[1], 0.0)
+            
+        # Add jitter to avoid overlap with other players
+        jitter_x = random.uniform(-1.0, 1.0)
+        jitter_y = random.uniform(-1.0, 1.0)
+        safe_x = spawn[0] + jitter_x
+        safe_y = spawn[1] + jitter_y
+        safe_z = spawn[2]
         
-        # If no teammates found, use spawn point
-        if is_attacker and self.map_data.get("attacker_spawns"):
-            spawn = random.choice(self.map_data["attacker_spawns"])
-            return (spawn[0], spawn[1], 0.0)
-        elif not is_attacker and self.map_data.get("defender_spawns"):
-            spawn = random.choice(self.map_data["defender_spawns"])
-            return (spawn[0], spawn[1], 0.0)
-        
-        # Last resort - return to center of map
-        return (16.0, 16.0, 0.0)
+        # Validate position is within map bounds
+        if self.map and not self.map.is_valid_position(safe_x, safe_y, safe_z):
+            # Try again with less jitter
+            jitter_x = random.uniform(-0.5, 0.5)
+            jitter_y = random.uniform(-0.5, 0.5)
+            safe_x = spawn[0] + jitter_x
+            safe_y = spawn[1] + jitter_y
+            
+        return (safe_x, safe_y, safe_z)
     
     def _get_map_collision_data(self):
-        """Get collision data from map_data for player movement."""
-        try:
-            from app.simulation.models.map import Map
-            # Create a Map object that the player's movement system can use
-            map_size = self.map_data.get("metadata", {}).get("map-size", [32, 32])
-            game_map = Map(self.map_data.get("metadata", {}).get("name", "Unknown"), 
-                          map_size[0], map_size[1])
-            
-            # Load map areas, walls, etc. from map_data
-            for name, area_data in self.map_data.get("map-areas", {}).items():
-                game_map.areas[name] = {
-                    "x": area_data["x"],
-                    "y": area_data["y"],
-                    "w": area_data["w"],
-                    "h": area_data["h"],
-                    "z": area_data.get("z", 0)
-                }
-            
-            for name, wall_data in self.map_data.get("walls", {}).items():
-                game_map.walls[name] = {
-                    "x": wall_data["x"],
-                    "y": wall_data["y"],
-                    "w": wall_data["w"],
-                    "h": wall_data["h"],
-                    "z": wall_data.get("z", 0)
-                }
-            
-            # Add objects and other collision elements
-            for name, obj_data in self.map_data.get("objects", {}).items():
-                if name != "instructions":
-                    game_map.objects[name] = {
-                        "x": obj_data["x"],
-                        "y": obj_data["y"],
-                        "w": obj_data["w"],
-                        "h": obj_data["h"],
-                        "z": obj_data.get("z", 0)
-                    }
-            
-            return game_map
-        except ImportError:
-            # If Map class is not available, return a simplified object that
-            # implements the necessary collision methods
-            class SimpleMap:
-                def is_valid_position(self, x, y, z=0.0, radius=0.5):
-                    # Simple check that position is within map bounds
-                    map_size = self.map_data.get("metadata", {}).get("map-size", [32, 32])
-                    return 0 <= x < map_size[0] and 0 <= y < map_size[1]
+        """Get collision data for the map (walls, objects, etc.)."""
+        # First try to use the Map object directly
+        if hasattr(self.map, "is_valid_position"):
+            return self.map
+        
+        # Fallback to simple map wrapper
+        return SimpleMap(self.map)
+        
+        class SimpleMap:
+            """Simple wrapper for map data to provide collision detection."""
+            def __init__(self, map_obj):
+                self.map = map_obj
                 
-                def get_elevation_at_position(self, x, y):
-                    # By default, everything is at ground level
-                    return 0.0
+            def is_valid_position(self, x, y, z=0.0, radius=0.5):
+                """Simple check that position is within map bounds and not in a wall."""
+                # Check map bounds
+                if not (0 <= x < self.map.width and 0 <= y < self.map.height):
+                    return False
                 
-                def get_area_at_position(self, x, y, z=0.0):
-                    # Simple implementation that just checks if within map bounds
-                    if 0 <= x < self.map_data.get("metadata", {}).get("map-size", [32, 32])[0] and \
-                       0 <= y < self.map_data.get("metadata", {}).get("map-size", [32, 32])[1]:
-                        return "default-area"
-                    return None
-            
-            simple_map = SimpleMap()
-            simple_map.map_data = self.map_data
-            return simple_map
+                # Check collision with walls
+                for wall in self.map.walls.values():
+                    wall_x = wall.get("x", 0)
+                    wall_y = wall.get("y", 0)
+                    wall_w = wall.get("w", 0)
+                    wall_h = wall.get("h", 0)
+                    
+                    # Expand wall rect by player radius for collision check
+                    expanded_x = wall_x - radius
+                    expanded_y = wall_y - radius
+                    expanded_w = wall_w + 2 * radius
+                    expanded_h = wall_h + 2 * radius
+                    
+                    # Check if point is inside expanded rect
+                    if (expanded_x <= x <= expanded_x + expanded_w and
+                        expanded_y <= y <= expanded_y + expanded_h):
+                        return False
+                
+                # Check collision with objects
+                for obj in self.map.objects.values():
+                    obj_x = obj.get("x", 0)
+                    obj_y = obj.get("y", 0)
+                    obj_w = obj.get("w", 0)
+                    obj_h = obj.get("h", 0)
+                    
+                    # Expand object rect by player radius for collision check
+                    expanded_x = obj_x - radius
+                    expanded_y = obj_y - radius
+                    expanded_w = obj_w + 2 * radius
+                    expanded_h = obj_h + 2 * radius
+                    
+                    # Check if point is inside expanded rect
+                    if (expanded_x <= x <= expanded_x + expanded_w and
+                        expanded_y <= y <= expanded_y + expanded_h):
+                        return False
+                
+                return True
+                
+            def get_elevation_at_position(self, x, y):
+                """Get elevation (z-coordinate) at position."""
+                # By default, everything is at ground level
+                if hasattr(self.map, "get_elevation_at_position"):
+                    return self.map.get_elevation_at_position(x, y)
+                return 0.0
+                
+            def get_area_at_position(self, x, y, z=0.0):
+                """Get area name at position."""
+                # Simple implementation that just checks if within map bounds
+                if hasattr(self.map, "get_area_at_position"):
+                    return self.map.get_area_at_position(x, y, z)
+                
+                if 0 <= x < self.map.width and 0 <= y < self.map.height:
+                    return "main"
+                return None
     
     def _get_desired_movement_direction(self, player_id: str) -> Tuple[float, float]:
         """Calculate the desired movement direction for a player based on their current objectives."""
@@ -1316,11 +1395,30 @@ class Round:
             return (0, 0)
     
     def _get_plant_site_positions(self) -> Dict[str, Tuple[float, float]]:
-        """Get positions of all plant sites."""
-        site_positions = {}
-        for site_key, site_info in self.map_data.get("bomb-sites", {}).items():
-            site_positions[site_key] = (site_info["x"] + site_info["w"]/2, site_info["y"] + site_info["h"]/2)
-        return site_positions
+        """Get the center position of each plant site."""
+        plant_sites = {}
+        
+        # Try to get bomb sites from the map object
+        if hasattr(self.map, "bomb_sites"):
+            for site_name, site_data in self.map.bomb_sites.items():
+                if isinstance(site_data, dict):
+                    # Site data is a dictionary
+                    x = site_data.get("x", 0)
+                    y = site_data.get("y", 0)
+                    w = site_data.get("w", 0)
+                    h = site_data.get("h", 0)
+                    # Center of the site
+                    plant_sites[site_name] = (x + w/2, y + h/2)
+                else:
+                    # Site data is an object with attributes
+                    x = getattr(site_data, "x", 0)
+                    y = getattr(site_data, "y", 0)
+                    w = getattr(site_data, "width", 0)
+                    h = getattr(site_data, "height", 0)
+                    # Center of the site
+                    plant_sites[site_name] = (x + w/2, y + h/2)
+        
+        return plant_sites
     
     def _get_spike_position(self) -> Optional[Tuple[float, float]]:
         """Get the current position of the spike."""
@@ -1692,13 +1790,37 @@ class Round:
     def _get_strategic_point(
         self, player_id: str, ability: AbilityInstance, strategy: Any
     ) -> Optional[Tuple[float, float]]:
-        """Get a strategic point to target an ability."""
-        # This would use map knowledge and current strategy to determine
-        # good locations for smokes, recon, etc.
-        # For now, return a simple placeholder implementation
-        if strategy.target_site:
-            site_info = self.map_data.get("plant_sites", {}).get(strategy.target_site, {})
-            return site_info.get("center", None)
+        """Get a strategic point on the map for ability use."""
+        target_site = None
+        if strategy and hasattr(strategy, 'target_site'):
+            target_site = strategy.target_site
+            
+        # Default to a random site if no specific target
+        if not target_site:
+            if self.map and self.map.bomb_sites:
+                target_site = random.choice(list(self.map.bomb_sites.keys()))
+            else:
+                plant_sites = self.map_data.get("plant_sites", {})
+                if plant_sites:
+                    target_site = random.choice(list(plant_sites.keys()))
+            
+        if target_site:
+            # Get site info
+            if self.map and target_site in self.map.bomb_sites:
+                site = self.map.bomb_sites[target_site]
+                site_center = (site["x"] + site["w"]/2, site["y"] + site["h"]/2)
+                return site_center
+            elif self.map_data:
+                # Legacy fallback
+                site_info = self.map_data.get("plant_sites", {}).get(strategy.target_site, {})
+                if site_info and "center" in site_info:
+                    return site_info["center"]
+                
+        # Fallback: return player position
+        player = self.players.get(player_id)
+        if player:
+            return (player.location[0], player.location[1])
+            
         return None
 
     def _get_projectile_target(

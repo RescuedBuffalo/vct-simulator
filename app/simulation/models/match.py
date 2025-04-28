@@ -240,6 +240,7 @@ class Match:
                 attacker_ids=attacker_ids,
                 defender_ids=defender_ids,
                 map_data=map_data,
+                map_obj=self.map,
                 attacker_blackboard=attacker_blackboard,
                 defender_blackboard=defender_blackboard
             )
