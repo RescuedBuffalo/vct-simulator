@@ -6,7 +6,9 @@ from app.simulation.models.team import Team
 from app.simulation.models.round import Round
 from app.simulation.models.match import Match
 from app.simulation.models.map import generate_random_map, Map, MapBoundary
-from app.simulation.ai_greedy import GreedyAgent
+from app.simulation.ai.agents.base import AgentConfig
+from app.simulation.ai.agents.greedy import GreedyAgent
+from app.simulation.ai.inference.agent_pool import AgentPool
 from json import load
 
 class DummyAbility:
@@ -48,15 +50,34 @@ def test_full_valorant_game_simulation():
     team_a = Team(id="A", name="Team A", players=team_a_players)
     team_b = Team(id="B", name="Team B", players=team_b_players)
 
-    # 5. Wrap each Player in a GreedyAgent (not used directly, but would be in a real agent loop)
-    agents_dict = {p.id: GreedyAgent(p) for p in players}
+    # 5. Create agent pool and register agent types
+    agent_pool = AgentPool()
+    agent_pool.register_agent_class('greedy', GreedyAgent)
+    
+    # 6. Create agents for each player based on their role and skill
+    agents_dict = {}
+    for player in players:
+        # Convert player stats to skill level (0-1)
+        skill_level = (
+            player.aim_rating / 100 * 0.4 +  # 40% weight on aim
+            player.movement_accuracy * 0.3 +  # 30% weight on movement
+            player.clutch_iq * 0.3           # 30% weight on decision making
+        )
+        
+        # Get appropriate agent from pool
+        agent = agent_pool.get_agent(
+            role=player.role,
+            skill_level=skill_level,
+            agent_type='greedy'  # For now, use greedy for all
+        )
+        agents_dict[player.id] = agent
 
-    # 6. Prepare player dict and team ids for Round
+    # 7. Prepare player dict and team ids for Round
     player_dict = {p.id: p for p in players}
     attacker_ids = [p.id for p in team_a_players]
     defender_ids = [p.id for p in team_b_players]
 
-    # 7. Create initial Round with the Map object
+    # 8. Create initial Round with the Map object
     round_obj = Round(
         round_number=1,
         players=player_dict,
@@ -66,7 +87,7 @@ def test_full_valorant_game_simulation():
         map_obj=game_map    # Pass the Map object
     )
 
-    # 8. Create Match
+    # 9. Create Match
     match = Match(
         map=game_map,
         round=round_obj,
@@ -74,10 +95,10 @@ def test_full_valorant_game_simulation():
         team_b=team_b
     )
 
-    # 9. Run the match (this will simulate all rounds)
+    # 10. Run the match (this will simulate all rounds)
     match.run()
 
-    # 10. Print or assert on the final score and stats
+    # 11. Print or assert on the final score and stats
     print(f"Final Score: Team A {match.team_a_score} - Team B {match.team_b_score}")
     match.get_detailed_match_stats(write_to_file=True)
     match.stats.team_a_stats.get_summary(write_to_file=True)

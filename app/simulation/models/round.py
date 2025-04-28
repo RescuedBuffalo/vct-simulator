@@ -300,6 +300,7 @@ class Round:
         self._purchase_events: List[Dict] = []
         self.kill_count = 0
         self.print_kills = False
+        self.tick_logs = []  # Per-tick RL logs: list of dicts (obs, action, reward, done)
     
     def _update_alive_players_in_blackboards(self) -> None:
         """Update the blackboards with currently alive players."""
@@ -393,8 +394,8 @@ class Round:
         }
         return round_summary
 
-    def update(self, time_step: float) -> None:
-        """Update the round state by one time step."""
+    def update(self, time_step: float, match_id=None, agents_dict=None) -> None:
+        """Update the round state by one time step. Optionally log RL data."""
         self.tick += time_step
         
         # Update phase
@@ -422,6 +423,8 @@ class Round:
         
         # Update alive players in blackboards
         self._update_alive_players_in_blackboards()
+        # --- RL per-tick logging ---
+        self.log_tick_data(match_id=match_id, agents_dict=agents_dict)
     
     def _process_buy_phase(self, time_step: float) -> None:
         """Handle buy phase logic."""
@@ -2081,3 +2084,35 @@ class Round:
             player.location
         )
         print(f"[ROUND] Defusing stopped by {player.id} at {player.location}")
+
+    def log_tick_data(self, match_id=None, agents_dict=None):
+        """
+        Log (obs, action, reward, done) for each player at this tick.
+        Args:
+            match_id: Optional match identifier
+            agents_dict: Dict of player_id -> agent (must have decide_action method)
+        Appends a dict per player to self.tick_logs.
+        """
+        for player_id, player in self.players.items():
+            # Determine team blackboard
+            team_blackboard = self.attacker_blackboard if player_id in self.attacker_ids else self.defender_blackboard
+            obs = player.get_observation(self, team_blackboard)
+            action = None
+            if agents_dict and player_id in agents_dict:
+                action = agents_dict[player_id].decide_action(self)
+            else:
+                action = None
+            # For now, reward is 0 unless player has a reward attribute
+            reward = getattr(player, 'reward', 0)
+            # Done if player is dead or round is over
+            done = (not player.alive) or (self.phase == RoundPhase.END)
+            self.tick_logs.append({
+                'match_id': match_id,
+                'round_number': self.round_number,
+                'tick': getattr(self, 'tick', None),
+                'player_id': player_id,
+                'observation': obs,
+                'action': action,
+                'reward': reward,
+                'done': done
+            })

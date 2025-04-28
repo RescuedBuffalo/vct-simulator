@@ -624,6 +624,102 @@ class Player:
         if round_obj is not None:
             round_obj.notify_defusing_stopped(self)
 
+    def get_observation(self, round_obj, team_blackboard, personality=None):
+        """
+        Return a serializable dict representing the player's observation at this tick.
+        Only includes information the player could reasonably know (partial observability).
+        Args:
+            round_obj: The current Round object (for round/map state)
+            team_blackboard: The player's team blackboard (for shared/team info)
+            personality: Optional personality/conditioning vector (for RL conditioning)
+        Returns:
+            obs (dict): The observation for this player at this tick
+        """
+        obs = {}
+        # --- Self State ---
+        obs["id"] = self.id
+        obs["team_id"] = self.team_id
+        obs["role"] = self.role
+        obs["agent"] = self.agent
+        obs["location"] = tuple(self.location)
+        obs["direction"] = self.direction
+        obs["health"] = self.health
+        obs["armor"] = self.armor
+        obs["alive"] = self.alive
+        obs["is_planting"] = self.is_planting
+        obs["is_defusing"] = self.is_defusing
+        obs["plant_progress"] = self.plant_progress
+        obs["defuse_progress"] = self.defuse_progress
+        obs["status_effects"] = list(self.status_effects)
+        obs["velocity"] = tuple(self.velocity)
+        obs["is_walking"] = self.is_walking
+        obs["is_crouching"] = self.is_crouching
+        obs["is_jumping"] = self.is_jumping
+        obs["is_falling"] = self.is_falling
+        obs["ground_contact"] = self.ground_contact
+        obs["creds"] = self.creds
+        obs["weapon"] = self.weapon
+        obs["secondary"] = self.secondary
+        obs["shield"] = self.shield
+        obs["spike"] = self.spike
+        obs["ult_points"] = self.ult_points
+        obs["utility_charges"] = dict(self.utility_charges)
+        obs["utility_cooldowns"] = dict(self.utility_cooldowns)
+        # --- Perception ---
+        obs["visible_enemies"] = list(self.visible_enemies)
+        obs["heard_sounds"] = [dict(s) for s in self.heard_sounds]
+        obs["known_enemy_positions"] = {k: tuple(v) for k, v in self.known_enemy_positions.items()}
+        obs["known_spike_location"] = tuple(self.known_spike_location) if self.known_spike_location else None
+        obs["comms_buffer"] = list(self.comms_buffer)
+        # --- Team State (partial, from blackboard) ---
+        obs["team_alive"] = list(team_blackboard.get("alive_players") or [])
+        obs["team_confidence"] = team_blackboard.get("team_confidence")
+        obs["current_strategy"] = None
+        strat = team_blackboard.get("current_strategy")
+        if strat:
+            obs["current_strategy"] = {
+                "name": strat.name,
+                "target_site": strat.target_site,
+                "issued_by": strat.issued_by,
+                "issued_at": strat.issued_at,
+                "details": strat.details,
+            }
+        obs["danger_areas"] = list(team_blackboard.get("danger_areas") or [])
+        obs["cleared_areas"] = list(team_blackboard.get("cleared_areas") or [])
+        obs["noise_events"] = list(team_blackboard.get("noise_events") or [])
+        # --- Objective/Map State (partial) ---
+        obs["round_number"] = getattr(round_obj, "round_number", None)
+        obs["phase"] = getattr(round_obj, "phase", None).value if hasattr(round_obj, "phase") else None
+        obs["round_time_remaining"] = getattr(round_obj, "round_time_remaining", None)
+        obs["spike_planted"] = getattr(round_obj, "spike_planted", None)
+        obs["spike_time_remaining"] = getattr(round_obj, "spike_time_remaining", None)
+        # Only include spike info if known to team (from blackboard)
+        spike_info = team_blackboard.get("spike_info")
+        if spike_info:
+            obs["spike_info"] = {
+                "location": tuple(spike_info.location) if spike_info.location else None,
+                "status": spike_info.status,
+                "carrier_id": spike_info.carrier_id,
+                "plant_time": spike_info.plant_time,
+                "plant_site": spike_info.plant_site,
+                "seen_by": spike_info.seen_by,
+                "last_updated": spike_info.last_updated,
+            }
+        else:
+            obs["spike_info"] = None
+        # --- Economy ---
+        econ = team_blackboard.get("economy")
+        if econ:
+            obs["team_credits"] = econ.team_credits
+            obs["avg_credits"] = econ.avg_credits
+            obs["can_full_buy"] = econ.can_full_buy
+            obs["can_half_buy"] = econ.can_half_buy
+            obs["saving"] = econ.saving
+        # --- Personality/Conditioning (optional) ---
+        if personality is not None:
+            obs["personality"] = personality
+        return obs
+
 def map_orm_player_to_sim_player(orm_player: 'OrmPlayer') -> Player:
     """
     Convert a SQLAlchemy Player model into the simulation Player dataclass.
