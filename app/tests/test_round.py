@@ -93,6 +93,46 @@ def test_carryover_state_ult_and_credits(mock_players):
     # d0 (defender) should get win credits
     assert carryover["d0"]["round_credits"] == 3000 
 
+def test_buying_shields_assigns_correct_shield():
+    # Player with enough credits for heavy shield
+    player = DummyPlayer("p1", "attackers")
+    player.creds = 4000
+    player.shield = None
+    players = {player.id: player}
+    defender = DummyPlayer("d1", "defenders")
+    players[defender.id] = defender
+    attacker_ids = [player.id]
+    defender_ids = [defender.id]
+    map_data = {
+        "attacker_spawns": [(0.0, 0.0, 0.0)],
+        "defender_spawns": [(1.0, 0.0, 0.0)],
+        "walls": {},
+        "plant_sites": {},
+    }
+    round_obj = make_round(players, attacker_ids, defender_ids, map_data=map_data)
+    # Simulate end of buy phase
+    round_obj.buy_phase_time = 0
+    round_obj._process_buy_phase(time_step=0.1)
+    assert player.shield == "heavy"
+    # Player with enough credits for light shield
+    player2 = DummyPlayer("p2", "attackers")
+    player2.creds = 2500
+    player2.shield = None
+    players2 = {player2.id: player2, defender.id: defender}
+    round_obj2 = make_round(players2, [player2.id], [defender.id], map_data=map_data)
+    round_obj2.buy_phase_time = 0
+    round_obj2._process_buy_phase(time_step=0.1)
+    assert player2.shield == "light"
+    # Player with not enough credits for shield
+    player3 = DummyPlayer("p3", "attackers")
+    player3.creds = 500
+    player3.shield = None
+    players3 = {player3.id: player3, defender.id: defender}
+    round_obj3 = make_round(players3, [player3.id], [defender.id], map_data=map_data)
+    round_obj3.buy_phase_time = 0
+    round_obj3._process_buy_phase(time_step=0.1)
+    assert player3.shield is None
+
 def test_round_integration_two_players():
     # Create two players and a minimal map
     attacker = DummyPlayer("a0", "attackers")
@@ -267,4 +307,93 @@ def test_integration_weapon_drop_and_pickup():
     round_obj._attempt_pickup_weapon(attacker)
     assert attacker.weapon == "Vandal"
     # Spectre should now be on the ground
-    assert any(w.weapon_type == "Spectre" for w in round_obj.dropped_weapons) 
+    assert any(w.weapon_type == "Spectre" for w in round_obj.dropped_weapons)
+
+def test_player_spawn_and_respawn_unit(mock_players):
+    """Unit test for player spawn and respawn logic."""
+    from app.simulation.models.round import Round
+    players, attacker_ids, defender_ids = mock_players
+    # Minimal map data with spawns
+    map_data = {
+        "attacker_spawns": [(10.0, 10.0, 0.0), (12.0, 10.0, 0.0)],
+        "defender_spawns": [(20.0, 20.0, 0.0), (22.0, 20.0, 0.0)],
+        "walls": {},
+        "plant_sites": {},
+    }
+    round_obj = make_round(players, attacker_ids, defender_ids, map_data=map_data)
+    # Check that all players are at spawn points (with jitter)
+    for pid in attacker_ids:
+        loc = players[pid].location
+        assert 9.0 <= loc[0] <= 13.0 and 9.0 <= loc[1] <= 11.0
+    for pid in defender_ids:
+        loc = players[pid].location
+        assert 19.0 <= loc[0] <= 23.0 and 19.0 <= loc[1] <= 21.0
+    # Simulate a player death and respawn (simulate by calling _initialize_player_positions again)
+    players[attacker_ids[0]].alive = False
+    round_obj._initialize_player_positions()
+    # Player should be moved to a spawn (with jitter)
+    loc = players[attacker_ids[0]].location
+    assert 9.0 <= loc[0] <= 13.0 and 9.0 <= loc[1] <= 11.0
+    # Mark alive again for respawn
+    players[attacker_ids[0]].alive = True
+    round_obj._initialize_player_positions()
+    loc = players[attacker_ids[0]].location
+    assert 9.0 <= loc[0] <= 13.0 and 9.0 <= loc[1] <= 11.0
+
+def test_integration_round_setup_and_buy():
+    """Integration test: load map, spawn players, and simulate buy phase purchases."""
+    from app.simulation.models.round import Round, RoundPhase
+    from app.simulation.models.map import MapLayout
+    from app.simulation.models.blackboard import Blackboard
+    import os
+    # Use the Ascent map if available, else fallback to minimal
+    ascent_path = os.path.join(os.path.dirname(__file__), '../../maps/ascent.map.json')
+    if os.path.exists(ascent_path):
+        map_layout = MapLayout.load_from_json(ascent_path)
+        map_data = map_layout.to_dict()
+    else:
+        map_data = {
+            "attacker_spawns": [(0.0, 0.0, 0.0)],
+            "defender_spawns": [(10.0, 0.0, 0.0)],
+            "walls": {},
+            "plant_sites": {},
+        }
+    # Create 5 attackers and 5 defenders
+    players = {}
+    attacker_ids = []
+    defender_ids = []
+    for i in range(5):
+        p = DummyPlayer(f"a{i}", "attackers")
+        players[p.id] = p
+        attacker_ids.append(p.id)
+    for i in range(5):
+        p = DummyPlayer(f"d{i}", "defenders")
+        players[p.id] = p
+        defender_ids.append(p.id)
+    round_obj = Round(
+        round_number=1,
+        players=players,
+        attacker_ids=attacker_ids,
+        defender_ids=defender_ids,
+        map_data=map_data,
+        attacker_blackboard=Blackboard("attackers"),
+        defender_blackboard=Blackboard("defenders"),
+    )
+    # All players should be at spawn points
+    for pid in attacker_ids + defender_ids:
+        loc = players[pid].location
+        assert isinstance(loc, tuple) and len(loc) >= 2
+    # Give each player credits so they can buy
+    for p in players.values():
+        p.creds = 3900
+    # Simulate end of buy phase
+    round_obj.buy_phase_time = 0
+    round_obj._process_buy_phase(time_step=0.1)
+    # All players should have a weapon and possibly a shield
+    for pid in attacker_ids + defender_ids:
+        player = players[pid]
+        assert player.weapon is not None
+        # Shield can be None, 'light', or 'heavy'
+        assert player.shield in (None, 'light', 'heavy')
+    # Round should now be in ROUND phase
+    assert round_obj.phase == RoundPhase.ROUND 
