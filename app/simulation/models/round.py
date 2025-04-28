@@ -66,6 +66,14 @@ class DroppedWeapon:
 
 
 @dataclass
+class DroppedShield:
+    """Track shields dropped on the map."""
+    shield_type: str  # "light" or "heavy"
+    position: Tuple[float, float]
+    dropped_time: float
+
+
+@dataclass
 class InfoEvent:
     """Information gathered by players."""
     type: str  # "spot", "sound", "damage", "ability"
@@ -170,6 +178,7 @@ class Round:
         # Events
         self.deaths: List[DeathEvent] = []
         self.dropped_weapons: List[DroppedWeapon] = []
+        self.dropped_shields: List[DroppedShield] = []
         self.active_abilities: List[AbilityInstance] = []
         self.info_events: List[InfoEvent] = []
         self.comms: List[CommEvent] = []
@@ -188,6 +197,14 @@ class Round:
         
         self.loss_bonus_attackers = loss_bonus_attackers
         self.loss_bonus_defenders = loss_bonus_defenders
+        
+        # Enhanced event tracking for statistics
+        self._death_events: List[DeathEvent] = []
+        self._plant_events: List[Dict] = []
+        self._defuse_events: List[Dict] = []
+        self._damage_events: List[Dict] = []
+        self._utility_events: List[Dict] = []
+        self._purchase_events: List[Dict] = []
     
     def _update_alive_players_in_blackboards(self) -> None:
         """Update the blackboards with currently alive players."""
@@ -395,6 +412,24 @@ class Round:
         if alive_player_count > 0:
             all_creds = [self.players[pid].creds for pid in team_blackboard.get("alive_players")]
             economy.avg_credits = sum(all_creds) / alive_player_count
+        
+        # Track purchase events for statistics
+        if player.weapon:
+            item_cost = {
+                "light_shield": 400,
+                "heavy_shield": 1000,
+                "Spectre": 1600,
+                "Bulldog": 2050,
+                "Phantom": 2900,
+                "Vandal": 2900,
+                "Operator": 4700,
+                "Sheriff": 800,
+                "Marshal": 950,
+                "Odin": 3200
+            }.get(player.weapon, 500)  # Default cost for unknown items
+            
+            item_type = "shield" if player.shield == "heavy" or player.shield == "light" else f"weapon_{player.weapon}"
+            self._log_purchase_event(player.id, item_type, item_cost)
     
     def _process_round_phase(self, time_step: float) -> None:
         """Handle round phase logic."""
@@ -944,6 +979,10 @@ class Round:
         if victim.weapon:
             self._drop_weapon(victim_id, victim.weapon, victim.location)
             
+        # Drop shield
+        if victim.shield:
+            self._drop_shield(victim_id, victim.shield, victim.location)
+            
         # Drop spike if carrying
         if victim.spike:
             self.spike_carrier_id = None
@@ -973,6 +1012,22 @@ class Round:
         # Remove weapon from player
         self.players[player_id].weapon = None
     
+    def _drop_shield(self, player_id: str, shield_type: str, location: Tuple[float, float]) -> None:
+        """Create a dropped shield on the map."""
+        # Create dropped shield
+        dropped = DroppedShield(
+            shield_type=shield_type,
+            position=location,
+            dropped_time=self.tick
+        )
+        
+        self.dropped_shields.append(dropped)
+        
+        # Remove shield from player
+        self.players[player_id].shield = None
+        # Reset player armor to 0 when shield is dropped
+        self.players[player_id].armor = 0
+    
     def _check_team_elimination(self) -> None:
         """Check if one team has been completely eliminated."""
         attackers_alive = sum(1 for pid in self.attacker_ids if self.players[pid].alive)
@@ -990,7 +1045,7 @@ class Round:
             self.phase = RoundPhase.END
     
     def _simulate_player_movements(self, time_step: float) -> None:
-        """Simulate player movements based on their current state and objectives."""
+        """Simulate all player movements based on current inputs and game state."""
         # For each player, calculate movement direction based on their goals
         # and use the new physics-based movement system
         
@@ -1044,6 +1099,7 @@ class Round:
             # Weapon pickup logic: only allowed during round phase (not buy phase)
             if self.phase == RoundPhase.ROUND:
                 self._attempt_pickup_weapon(player)
+                self._attempt_pickup_shield(player)
             
             # Check if player has fallen outside map bounds (safety check)
             if player.z_position < -10.0:  # If player has fallen far below the map
@@ -1073,6 +1129,27 @@ class Round:
                 break
         if weapon_to_remove:
             self.dropped_weapons.remove(weapon_to_remove)
+    
+    def _attempt_pickup_shield(self, player):
+        """Allow a player to pick up a dropped shield if close enough and doesn't already have one (or swaps)."""
+        pickup_radius = 1.5  # Distance within which a shield can be picked up
+        px, py = player.location[:2]
+        shield_to_remove = None
+        for dropped in self.dropped_shields:
+            dx, dy = dropped.position[:2]
+            dist = math.sqrt((px - dx) ** 2 + (py - dy) ** 2)
+            if dist <= pickup_radius:
+                # If player already has a shield, drop it at their current location
+                if player.shield:
+                    self._drop_shield(player.id, player.shield, (px, py))
+                # Pick up the dropped shield
+                player.shield = dropped.shield_type
+                # Update player armor based on shield type
+                player.armor = 50 if dropped.shield_type == "light" else 100
+                shield_to_remove = dropped
+                break
+        if shield_to_remove:
+            self.dropped_shields.remove(shield_to_remove)
     
     def _find_safe_position_for_player(self, player_id: str) -> Optional[Tuple[float, float, float]]:
         """Find a safe position to reset a player who has fallen out of bounds."""
@@ -1337,46 +1414,31 @@ class Round:
     def _log_death_event(
         self, victim_id: str, killer_id: str, weapon: str, is_headshot: bool
     ) -> None:
-        """Log a player death event."""
-        victim = self.players[victim_id]
+        """Log a death event for statistics tracking."""
+        # Get victim position
+        victim_position = self.players[victim_id].location[:2] if len(self.players[victim_id].location) >= 2 else (0.0, 0.0)
         
-        death_event = DeathEvent(
+        # Create and store the death event
+        event = DeathEvent(
             victim_id=victim_id,
             killer_id=killer_id,
-            assist_ids=[],  # Could track assists in a more complex implementation
+            assist_ids=[],  # Would need more tracking for assists
             weapon=weapon,
             time=self.tick,
-            position=victim.location,
-            is_headshot=is_headshot
+            position=victim_position,
+            is_wallbang=False,  # Would need line-of-sight checks
+            is_headshot=is_headshot,
         )
+        self._death_events.append(event)
         
-        self.deaths.append(death_event)
+        # Update stats for existing trackers
+        self.kill_count += 1
         
-        # Update blackboards with death information
-        is_attacker_killed = victim_id in self.attacker_ids
-        is_defender_killed = victim_id in self.defender_ids
-        
-        victim_team_blackboard = self.attacker_blackboard if is_attacker_killed else self.defender_blackboard
-        killer_team_blackboard = self.defender_blackboard if is_attacker_killed else self.attacker_blackboard
-        
-        # Victim team loses confidence
-        victim_team_blackboard.update_team_confidence(-0.15)
-        
-        # Killer team gains confidence
-        killer_team_blackboard.update_team_confidence(0.15)
-        
-        # Update alive players in blackboards - done in main update loop
-        
-        # If spike carrier died, update that info
-        if victim.spike:
-            spike_info = {
-                "status": "dropped",
-                "location": victim.location,
-                "carrier_id": None
-            }
-            self.attacker_blackboard.update_spike_info(**spike_info)
-            self.defender_blackboard.update_spike_info(**spike_info)
-    
+        # Echo to console if print_kills is True
+        if self.print_kills:
+            print(f"Round {self.round_number}, {self.tick:.1f}s: {killer_id} killed {victim_id} with {weapon}" + 
+                  (" (headshot)" if is_headshot else ""))
+
     def _log_info_event(
         self, source_id: str, target_id: str, position: Tuple[float, float], 
         event_type: str, info: Dict
@@ -1404,15 +1466,96 @@ class Round:
         self.comms.append(event)
     
     def _log_spike_planted(self, planter_id: str) -> None:
-        """Log a spike plant event."""
-        # Could create a specific event class for this
-        pass
+        """Log a spike plant event for statistics tracking."""
+        # Get site information
+        spike_position = self._get_spike_position() or (0.0, 0.0)
+        site = self._position_to_site(spike_position) or "Unknown"
+        
+        # Create and store the plant event
+        event = {
+            "planter_id": planter_id,
+            "time": self.tick,
+            "site": site,
+            "position": spike_position,
+            "remaining_defenders": len(self.get_alive_players("defenders"))
+        }
+        self._plant_events.append(event)
+        
+        # Echo to console if enabled
+        print(f"Round {self.round_number}, {self.tick:.1f}s: {planter_id} planted the spike at {site}")
     
     def _log_spike_defused(self, defuser_id: str) -> None:
-        """Log a spike defuse event."""
-        # Could create a specific event class for this
-        pass
+        """Log a spike defuse event for statistics tracking."""
+        # Get site information
+        spike_position = self._get_spike_position() or (0.0, 0.0)
+        site = self._position_to_site(spike_position) or "Unknown"
+        
+        # Create and store the defuse event
+        event = {
+            "defuser_id": defuser_id,
+            "time": self.tick,
+            "site": site,
+            "position": spike_position,
+            "remaining_attackers": len(self.get_alive_players("attackers"))
+        }
+        self._defuse_events.append(event)
+        
+        # Echo to console if enabled
+        print(f"Round {self.round_number}, {self.tick:.1f}s: {defuser_id} defused the spike at {site}")
     
+    def _log_damage_event(
+        self, attacker_id: str, victim_id: str, damage: int, weapon: str, 
+        hitbox: str = "body", is_through_smoke: bool = False, is_wallbang: bool = False
+    ) -> None:
+        """Log a damage event for statistics tracking."""
+        # Get positions
+        attacker_position = self.players[attacker_id].location[:2] if len(self.players[attacker_id].location) >= 2 else (0.0, 0.0)
+        victim_position = self.players[victim_id].location[:2] if len(self.players[victim_id].location) >= 2 else (0.0, 0.0)
+        
+        # Create and store the damage event
+        event = {
+            "attacker_id": attacker_id,
+            "victim_id": victim_id,
+            "damage": damage,
+            "weapon": weapon,
+            "hitbox": hitbox,
+            "time": self.tick,
+            "attacker_position": attacker_position,
+            "victim_position": victim_position,
+            "is_through_smoke": is_through_smoke,
+            "is_wallbang": is_wallbang
+        }
+        self._damage_events.append(event)
+
+    def _log_utility_usage(
+        self, player_id: str, utility_type: str, position: Tuple[float, float],
+        enemies_affected: int = 0, teammates_affected: int = 0
+    ) -> None:
+        """Log utility usage for statistics tracking."""
+        # Create and store the utility event
+        event = {
+            "player_id": player_id,
+            "utility_type": utility_type,
+            "time": self.tick,
+            "position": position,
+            "enemies_affected": enemies_affected,
+            "teammates_affected": teammates_affected
+        }
+        self._utility_events.append(event)
+
+    def _log_purchase_event(
+        self, player_id: str, item_type: str, cost: int
+    ) -> None:
+        """Log a purchase event for statistics tracking."""
+        # Create and store the purchase event
+        event = {
+            "player_id": player_id,
+            "item_type": item_type,
+            "cost": cost,
+            "time": self.tick
+        }
+        self._purchase_events.append(event)
+        
     def get_alive_players(self, team: str) -> List[str]:
         """Get IDs of alive players on the specified team."""
         if team == "attackers":
@@ -1441,7 +1584,7 @@ class Round:
             "alive_defenders": alive_defenders,
             "winner": self.round_winner.value if self.round_winner != RoundWinner.NONE else None,
             "end_condition": self.round_end_condition.value if self.round_end_condition else None,
-            "kill_count": len(self.deaths)
+            "kill_count": len(self._death_events)
         }
         
         return RoundResult(self.round_number, summary)
@@ -1473,7 +1616,7 @@ class Round:
         return random.random() < 0.1  # 10% chance to use ability each check
 
     def _use_ability(self, player_id: str, ability: AbilityInstance) -> None:
-        """Use an ability and apply its effects."""
+        """Use an ability in the simulation."""
         player = self.players[player_id]
         
         # Determine target position based on targeting type
@@ -1498,6 +1641,43 @@ class Round:
             target_pos,
             "ability",
             {"type": "use", "ability": ability.definition.name}
+        )
+        
+        # Track utility usage for statistics
+        player_pos = self.players[player_id].location[:2] if len(self.players[player_id].location) >= 2 else (0.0, 0.0)
+        
+        # Count affected players (simplified)
+        enemies_affected = 0
+        teammates_affected = 0
+        
+        if ability.ability_type in ["flash", "smoke", "molly"]:
+            # Simple radius check for affected players
+            affect_radius = {
+                "flash": 10.0,
+                "smoke": 5.0,
+                "molly": 5.0
+            }.get(ability.ability_type, 3.0)
+            
+            for pid, other_player in self.players.items():
+                if not other_player.alive:
+                    continue
+                    
+                other_pos = other_player.location[:2] if len(other_player.location) >= 2 else (0.0, 0.0)
+                distance = self._calculate_distance(player_pos, other_pos)
+                
+                if distance <= affect_radius:
+                    if (player_id in self.attacker_ids and pid in self.defender_ids) or \
+                       (player_id in self.defender_ids and pid in self.attacker_ids):
+                        enemies_affected += 1
+                    elif pid != player_id:  # Don't count self
+                        teammates_affected += 1
+        
+        self._log_utility_usage(
+            player_id=player_id,
+            utility_type=ability.ability_type,
+            position=player_pos,
+            enemies_affected=enemies_affected,
+            teammates_affected=teammates_affected
         )
 
     def _determine_ability_target(
