@@ -141,7 +141,7 @@ class Player:
             return self.max_speed
     
     def set_movement_input(self, direction: Tuple[float, float], is_walking: bool = False, 
-                          is_crouching: bool = False, is_jump_pressed: bool = False):
+                          is_crouching: bool = False, is_jump_pressed: bool = False, time_step: float = 1.0):
         """
         Set the player's movement input.
         
@@ -151,6 +151,13 @@ class Player:
             is_crouching: Whether the player is holding the crouch key (Ctrl)
             is_jump_pressed: Whether the player is pressing the jump key (Space)
         """
+        # Prevent movement if planting or defusing
+        if self.is_planting or self.is_defusing:
+            self.movement_direction = None
+            self.is_moving = False
+            self.is_walking = False
+            self.is_crouching = False
+            return
         # Normalize the direction vector if it's not zero
         if direction[0] != 0 or direction[1] != 0:
             magnitude = math.sqrt(direction[0]**2 + direction[1]**2)
@@ -181,7 +188,13 @@ class Player:
         Args:
             time_step: Time since last update in seconds
             game_map: The Map object for collision detection
-        """
+        """       
+        # Prevent movement if planting or defusing
+        if self.is_planting or self.is_defusing:
+            self.velocity = (0.0, 0.0, 0.0)
+            self.acceleration = (0.0, 0.0, 0.0)
+            return
+        
         # Store the old position for collision resolution
         old_position = self.location
         
@@ -582,6 +595,34 @@ class Player:
     def add_orb_pickup(self, max_ult: int = 7):
         """Handle orb pickup (increment ult points)."""
         self.increment_ult_points(1, max_ult)
+
+    def start_plant(self, round_obj=None):
+        """Start planting the spike and notify the round if provided."""
+        self.is_planting = True
+        self.plant_progress = 0.0
+        if round_obj is not None:
+            round_obj.notify_planting_started(self)
+
+    def stop_plant(self, round_obj=None):
+        """Stop planting the spike and notify the round if provided."""
+        self.is_planting = False
+        self.plant_progress = 0.0
+        if round_obj is not None:
+            round_obj.notify_planting_stopped(self)
+
+    def start_defuse(self, round_obj=None):
+        """Start defusing the spike and notify the round if provided."""
+        self.is_defusing = True
+        self.defuse_progress = 0.0
+        if round_obj is not None:
+            round_obj.notify_defusing_started(self)
+
+    def stop_defuse(self, round_obj=None):
+        """Stop defusing the spike and notify the round if provided."""
+        self.is_defusing = False
+        self.defuse_progress = 0.0
+        if round_obj is not None:
+            round_obj.notify_defusing_stopped(self)
 
 def map_orm_player_to_sim_player(orm_player: 'OrmPlayer') -> Player:
     """

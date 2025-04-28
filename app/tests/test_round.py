@@ -143,7 +143,13 @@ def test_round_integration_two_players():
     defender_ids = [defender.id]
     # Place them close together (ensure 3-tuple for location)
     attacker.location = (0.0, 0.0, 0.0)
+    attacker.is_moving = False
+    attacker.movement_direction = None
+    attacker.weapon = "Vandal"
     defender.location = (1.0, 0.0, 0.0)
+    defender.is_moving = False
+    defender.weapon = "Vandal"
+    defender.movement_direction = None
     # Ensure all locations are 3-tuples before simulation
     for p in players.values():
         if len(p.location) == 2:
@@ -206,12 +212,12 @@ def test_round_integration_two_players():
 def test_weapon_pickup_and_drop_unit():
     # Create a player and a dropped weapon nearby
     player = DummyPlayer("p1", "attackers")
-    player.location = (5.0, 5.0, 0.0)
+    player.location = (5.0, 5.0)
     player.weapon = None
     player.alive = True
     # Simulate a dropped weapon at the same location
     from app.simulation.models.round import DroppedWeapon, RoundPhase
-    dropped = DroppedWeapon(weapon_type="Vandal", ammo=20, position=(5.0, 5.0, 0.0), dropped_time=0.0)
+    dropped = DroppedWeapon(weapon_type="Vandal", ammo=20, position=(5.0, 5.0), dropped_time=0.0)
     # Create a minimal round object with at least one defender
     defender = DummyPlayer("d1", "defenders")
     players = {player.id: player, defender.id: defender}
@@ -243,11 +249,11 @@ def test_weapon_pickup_and_drop_unit():
 def test_weapon_pickup_swap():
     # Player already has a weapon, picks up another
     player = DummyPlayer("p2", "attackers")
-    player.location = (10.0, 10.0, 0.0)
+    player.location = (10.0, 10.0)
     player.weapon = "Spectre"
     player.alive = True
     from app.simulation.models.round import DroppedWeapon, RoundPhase
-    dropped = DroppedWeapon(weapon_type="Vandal", ammo=20, position=(10.0, 10.0, 0.0), dropped_time=0.0)
+    dropped = DroppedWeapon(weapon_type="Vandal", ammo=20, position=(10.0, 10.0), dropped_time=0.0)
     # Add a dummy defender
     defender = DummyPlayer("d2", "defenders")
     players = {player.id: player, defender.id: defender}
@@ -278,7 +284,11 @@ def test_integration_weapon_drop_and_pickup():
     attacker = DummyPlayer("a0", "attackers")
     defender = DummyPlayer("d0", "defenders")
     attacker.location = (0.0, 0.0, 0.0)
+    attacker.is_moving = False
+    attacker.movement_direction = None
     defender.location = (1.0, 0.0, 0.0)
+    defender.is_moving = False
+    defender.movement_direction = None
     attacker.weapon = "Spectre"
     defender.weapon = "Vandal"
     players = {attacker.id: attacker, defender.id: defender}
@@ -496,13 +506,13 @@ class DroppedShield:
 def test_shield_pickup_and_drop_unit():
     # Create a player and a dropped shield nearby
     player = DummyPlayer("p1", "attackers")
-    player.location = (5.0, 5.0, 0.0)
+    player.location = (5.0, 5.0)
     player.shield = None
     player.alive = True
     
     # Simulate a dropped shield at the same location
     from app.simulation.models.round import RoundPhase
-    dropped = DroppedShield(shield_type="heavy", position=(5.0, 5.0, 0.0), dropped_time=0.0)
+    dropped = DroppedShield(shield_type="heavy", position=(5.0, 5.0), dropped_time=0.0)
     
     # Create a minimal round object with at least one defender
     defender = DummyPlayer("d1", "defenders")
@@ -539,12 +549,12 @@ def test_shield_pickup_and_drop_unit():
 def test_shield_pickup_swap():
     # Player already has a shield, picks up another
     player = DummyPlayer("p2", "attackers")
-    player.location = (10.0, 10.0, 0.0)
+    player.location = (10.0, 10.0)
     player.shield = "light"
     player.alive = True
     
     from app.simulation.models.round import RoundPhase
-    dropped = DroppedShield(shield_type="heavy", position=(10.0, 10.0, 0.0), dropped_time=0.0)
+    dropped = DroppedShield(shield_type="heavy", position=(10.0, 10.0), dropped_time=0.0)
     
     # Add a dummy defender
     defender = DummyPlayer("d2", "defenders")
@@ -579,7 +589,11 @@ def test_integration_shield_drop_and_pickup():
     attacker = DummyPlayer("a0", "attackers")
     defender = DummyPlayer("d0", "defenders")
     attacker.location = (0.0, 0.0, 0.0)
+    attacker.is_moving = False
+    attacker.movement_direction = None
     defender.location = (1.0, 0.0, 0.0)
+    defender.is_moving = False
+    defender.movement_direction = None
     attacker.shield = "light"
     defender.shield = "heavy"
     players = {attacker.id: attacker, defender.id: defender}
@@ -688,6 +702,7 @@ def test_agent_selection_phase():
         attacker_blackboard=Blackboard("attackers"),
         defender_blackboard=Blackboard("defenders"),
     )
+    round_obj.spike_carrier_id = players_a[0].id
     match = Match(Map("TestMap", 20, 20), round_obj, team_a, team_b)
     # Call agent selection
     match.agent_selection_phase()
@@ -728,6 +743,7 @@ def test_match_timeouts():
         attacker_blackboard=Blackboard("attackers"),
         defender_blackboard=Blackboard("defenders"),
     )
+    round_obj.spike_carrier_id = players_a[0].id
     match = Match(Map("TestMap", 20, 20), round_obj, team_a, team_b)
     # Initial timeouts
     assert match.timeouts_remaining[team_a.id] == 1
@@ -750,3 +766,226 @@ def test_match_timeouts():
     # Team_b can still call theirs
     assert match.call_timeout(team_b.id) is True
     assert match.timeouts_remaining[team_b.id] == 0 
+
+def test_spike_plant_success():
+    """Test that an attacker can plant the spike at a valid site and it is marked as planted."""
+    from app.simulation.models.round import Round, RoundPhase
+    attacker = DummyPlayer("a0", "attackers")
+    attacker.location = (5.0, 5.0, 0.0)
+    attacker.is_moving = False
+    attacker.movement_direction = None
+    attacker.alive = True
+    attacker.weapon = None
+    defender = DummyPlayer("d0", "defenders")
+    defender.alive = True
+    defender.weapon = None
+    players = {attacker.id: attacker, defender.id: defender}
+    attacker_ids = [attacker.id]
+    defender_ids = [defender.id]
+    map_data = {
+        "attacker_spawns": [(0.0, 0.0, 0.0)],
+        "defender_spawns": [(10.0, 0.0, 0.0)],
+        "plant_sites": {"A": {"center": (5.0, 5.0, 0.0), "radius": 2.0}},
+        "walls": {},
+    }
+    round_obj = make_round(players, attacker_ids, defender_ids, map_data=map_data)
+    round_obj.phase = RoundPhase.ROUND
+    round_obj.spike_carrier_id = attacker.id
+    attacker.spike = True
+    attacker.plant_progress = 0.0
+    time_step = 1.0
+    attacker.update_movement = lambda *a, **kw: None
+    attacker.location = (5.0, 5.0, 0.0)
+    attacker.start_plant(round_obj)
+    for _ in range(10):
+        print(f"[DEBUG] update started..")
+        round_obj.update(time_step)
+        print(f"[DEBUG] update complete.")
+    assert round_obj.spike_planted
+    assert not attacker.spike
+    assert attacker.plants == 1
+    assert round_obj.spike_position == attacker.location
+
+
+def test_spike_plant_fail_wrong_location():
+    """Test that planting fails if not at a valid plant site."""
+    from app.simulation.models.round import RoundPhase
+    attacker = DummyPlayer("a0", "attackers")
+    attacker.location = (0.0, 0.0, 0.0)
+    attacker.is_moving = False
+    attacker.movement_direction = None
+    attacker.alive = True
+    defender = DummyPlayer("d0", "defenders")
+    defender.alive = True
+    players = {attacker.id: attacker, defender.id: defender}
+    attacker_ids = [attacker.id]
+    defender_ids = [defender.id]
+    map_data = {
+        "attacker_spawns": [(0.0, 0.0, 0.0)],
+        "defender_spawns": [(10.0, 0.0, 0.0)],
+        "plant_sites": {"A": {"center": (5.0, 5.0), "radius": 2.0}},
+        "walls": {},
+    }
+    round_obj = make_round(players, attacker_ids, defender_ids, map_data=map_data)
+    round_obj.phase = RoundPhase.ROUND
+    round_obj.spike_carrier_id = attacker.id
+    attacker.spike = True
+    attacker.plant_progress = 0.0
+    time_step = 0.5
+    attacker.update_movement = lambda *a, **kw: None
+    attacker.start_plant(round_obj)
+    for _ in range(10):
+        attacker.location = (0.0, 0.0, 0.0)
+        round_obj.update(time_step)
+    assert not round_obj.spike_planted
+    assert attacker.spike
+    assert attacker.plants == 0
+
+
+def test_spike_defuse_success():
+    """Test that a defender can defuse the spike at the correct location."""
+    from app.simulation.models.round import RoundPhase, RoundWinner, RoundEndCondition
+    attacker = DummyPlayer("a0", "attackers")
+    attacker.alive = True
+    defender = DummyPlayer("d0", "defenders")
+    defender.location = (5.0, 5.0, 0.0)
+    defender.is_moving = False
+    defender.movement_direction = None
+    defender.alive = True
+    players = {attacker.id: attacker, defender.id: defender}
+    attacker_ids = [attacker.id]
+    defender_ids = [defender.id]
+    map_data = {
+        "attacker_spawns": [(0.0, 0.0, 0.0)],
+        "defender_spawns": [(10.0, 0.0, 0.0)],
+        "plant_sites": {"A": {"center": (5.0, 5.0, 0.0), "radius": 2.0}},
+        "walls": {},
+    }
+    round_obj = make_round(players, attacker_ids, defender_ids, map_data=map_data)
+    round_obj.phase = RoundPhase.ROUND
+    round_obj.spike_carrier_id = attacker.id
+    round_obj.spike_planted = True
+    round_obj.spike_position = (5.0, 5.0, 0.0)
+    round_obj.spike_time_remaining = 45.0
+    defender.update_movement = lambda *a, **kw: None
+    time_step = 0.5
+    defender.start_defuse(round_obj)
+    for _ in range(20):
+        defender.location = (5.0, 5.0, 0.0)
+        round_obj.update(time_step)
+        if round_obj.round_winner != RoundWinner.NONE:
+            break
+    assert not round_obj.spike_planted
+    assert defender.defuses == 1
+    assert round_obj.round_winner == RoundWinner.DEFENDERS
+    assert round_obj.round_end_condition == RoundEndCondition.SPIKE_DEFUSED
+
+
+def test_spike_defuse_fail_wrong_location():
+    """Test that defusing fails if not at the spike location."""
+    from app.simulation.models.round import RoundPhase
+    attacker = DummyPlayer("a0", "attackers")
+    attacker.alive = True
+    defender = DummyPlayer("d0", "defenders")
+    defender.location = (0.0, 0.0, 0.0)
+    defender.is_moving = False
+    defender.movement_direction = None
+    defender.alive = True
+    players = {attacker.id: attacker, defender.id: defender}
+    attacker_ids = [attacker.id]
+    defender_ids = [defender.id]
+    map_data = {
+        "attacker_spawns": [(0.0, 0.0, 0.0)],
+        "defender_spawns": [(10.0, 0.0, 0.0)],
+        "plant_sites": {"A": {"center": (5.0, 5.0), "radius": 2.0}},
+        "walls": {},
+    }
+    round_obj = make_round(players, attacker_ids, defender_ids, map_data=map_data)
+    round_obj.phase = RoundPhase.ROUND
+    round_obj.spike_carrier_id = attacker.id
+    round_obj.spike_planted = True
+    round_obj.spike_position = (5.0, 5.0, 0.0)
+    round_obj.spike_time_remaining = 45.0
+    defender.defuse_progress = 0.0
+    time_step = 0.5
+    for _ in range(20):
+        round_obj.update(time_step)
+    assert round_obj.spike_planted
+    assert defender.defuses == 0
+
+
+def test_spike_detonation_ends_round():
+    """Test that the round ends with attackers winning if spike detonates."""
+    from app.simulation.models.round import RoundPhase, RoundWinner, RoundEndCondition
+    attacker = DummyPlayer("a0", "attackers")
+    attacker.alive = True
+    defender = DummyPlayer("d0", "defenders")
+    defender.alive = True
+    players = {attacker.id: attacker, defender.id: defender}
+    attacker_ids = [attacker.id]
+    defender_ids = [defender.id]
+    map_data = {
+        "attacker_spawns": [(0.0, 0.0, 0.0)],
+        "defender_spawns": [(10.0, 0.0, 0.0)],
+        "plant_sites": {"A": {"center": (5.0, 5.0), "radius": 2.0}},
+        "walls": {},
+    }
+    round_obj = make_round(players, attacker_ids, defender_ids, map_data=map_data)
+    round_obj.phase = RoundPhase.ROUND
+    round_obj.spike_carrier_id = attacker.id
+    round_obj.spike_planted = True
+    round_obj.spike_position = (5.0, 5.0, 0.0)
+    round_obj.spike_time_remaining = 1.0
+    # Ensure both players are not at the spike location
+    attacker.location = (0.0, 0.0, 0.0)
+    attacker.is_moving = False
+    attacker.movement_direction = None
+    defender.location = (10.0, 0.0, 0.0)
+    defender.is_moving = False
+    defender.movement_direction = None
+    time_step = 0.5
+    for _ in range(5):
+        round_obj.update(time_step)
+        if round_obj.round_winner != RoundWinner.NONE:
+            break
+    assert round_obj.round_winner == RoundWinner.ATTACKERS
+    assert round_obj.round_end_condition == RoundEndCondition.SPIKE_DETONATION
+    assert round_obj.phase == RoundPhase.END
+
+
+def test_spike_defuse_ends_round():
+    """Test that the round ends with defenders winning if spike is defused."""
+    from app.simulation.models.round import RoundPhase, RoundWinner, RoundEndCondition
+    attacker = DummyPlayer("a0", "attackers")
+    attacker.alive = True
+    defender = DummyPlayer("d0", "defenders")
+    defender.location = (5.0, 5.0, 0.0)
+    defender.is_moving = False
+    defender.movement_direction = None
+    defender.alive = True
+    players = {attacker.id: attacker, defender.id: defender}
+    attacker_ids = [attacker.id]
+    defender_ids = [defender.id]
+    map_data = {
+        "attacker_spawns": [(0.0, 0.0, 0.0)],
+        "defender_spawns": [(10.0, 0.0, 0.0)],
+        "plant_sites": {"A": {"center": (5.0, 5.0), "radius": 2.0}},
+        "walls": {},
+    }
+    round_obj = make_round(players, attacker_ids, defender_ids, map_data=map_data)
+    round_obj.phase = RoundPhase.ROUND
+    round_obj.spike_carrier_id = attacker.id
+    round_obj.spike_planted = True
+    round_obj.spike_position = (5.0, 5.0, 0.0)
+    round_obj.spike_time_remaining = 45.0
+    # Set location after round creation to override spawn jitter
+    defender.location = (5.0, 5.0, 0.0)
+    defender.defuse_progress = 0.0
+    time_step = 0.5
+    defender.update_movement = lambda *a, **kw: None
+    for _ in range(20):
+        round_obj.update(time_step)
+        defender.location = (5.0, 5.0, 0.0)
+    assert round_obj.round_winner == RoundWinner.DEFENDERS
+    assert round_obj.round_end_condition == RoundEndCondition.SPIKE_DEFUSED
+    assert round_obj.phase == RoundPhase.END 

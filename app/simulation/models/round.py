@@ -245,32 +245,33 @@ class Round:
         attacker_spawns = self.map_data.get("attacker_spawns", [])
         for i, player_id in enumerate(self.attacker_ids):
             spawn_idx = i % len(attacker_spawns) if attacker_spawns else 0
-            spawn_position = attacker_spawns[spawn_idx] if attacker_spawns else (0.0, 0.0)
-            
+            spawn_position = attacker_spawns[spawn_idx] if attacker_spawns else (0.0, 0.0, 0.0)
+            # Ensure spawn_position is 3D
+            if len(spawn_position) == 2:
+                spawn_position = (spawn_position[0], spawn_position[1], 0.0)
             # Add some randomness to avoid players on exact same spot
             jitter_x = random.uniform(-1.0, 1.0)
             jitter_y = random.uniform(-1.0, 1.0)
-            
-            self.players[player_id].location = (
-                spawn_position[0] + jitter_x,
-                spawn_position[1] + jitter_y
-            )
+            x = spawn_position[0] + jitter_x
+            y = spawn_position[1] + jitter_y
+            z = spawn_position[2]
+            self.players[player_id].location = (x, y, z)
             self.players[player_id].direction = 0.0  # Face forward
-            
         # Position defenders at defender spawn points
         defender_spawns = self.map_data.get("defender_spawns", [])
         for i, player_id in enumerate(self.defender_ids):
             spawn_idx = i % len(defender_spawns) if defender_spawns else 0
-            spawn_position = defender_spawns[spawn_idx] if defender_spawns else (0.0, 0.0)
-            
+            spawn_position = defender_spawns[spawn_idx] if defender_spawns else (0.0, 0.0, 0.0)
+            # Ensure spawn_position is 3D
+            if len(spawn_position) == 2:
+                spawn_position = (spawn_position[0], spawn_position[1], 0.0)
             # Add some randomness to avoid players on exact same spot
             jitter_x = random.uniform(-1.0, 1.0)
             jitter_y = random.uniform(-1.0, 1.0)
-            
-            self.players[player_id].location = (
-                spawn_position[0] + jitter_x,
-                spawn_position[1] + jitter_y
-            )
+            x = spawn_position[0] + jitter_x
+            y = spawn_position[1] + jitter_y
+            z = spawn_position[2]
+            self.players[player_id].location = (x, y, z)
             self.players[player_id].direction = 180.0  # Face opposite direction
     
     def simulate(self, time_step: float = 0.5) -> Dict:
@@ -338,10 +339,13 @@ class Round:
         
         # Update phase
         if self.phase == RoundPhase.BUY:
+            print(f"[DEBUG] update: Round {self.round_number} in buy phase.")
             self._process_buy_phase(time_step)
         elif self.phase == RoundPhase.ROUND:
+            print(f"[DEBUG] update: Round {self.round_number} in progress.")
             self._process_round_phase(time_step)
         elif self.phase == RoundPhase.END:
+            print(f"[DEBUG] update: Round {self.round_number} in end phase.")
             # Nothing to do in end phase
             pass
             
@@ -533,43 +537,40 @@ class Round:
     
     def _position_to_site(self, position: Tuple[float, float]) -> Optional[str]:
         """Determine which site (if any) a position is nearest to."""
+        pos2d = position[:2] if len(position) >= 2 else position
         for site_name, site_info in self.map_data.get("plant_sites", {}).items():
             center = site_info.get("center", (0, 0))
+            center2d = center[:2] if len(center) >= 2 else center
             radius = site_info.get("radius", 10.0)
-            
-            if self._calculate_distance(position, center) <= radius * 1.5:  # Use 1.5x radius to include approaches
+            if self._calculate_distance(pos2d, center2d) <= radius * 1.5:
                 return site_name
-                
         return None
     
     def _process_spike_actions(self, time_step: float) -> None:
         """Handle spike-related actions such as planting and defusing."""
         # Handle spike planting
+        print(f"[DEBUG] _process_spike_actions: spike_planted={self.spike_planted}")
         for player_id in self.attacker_ids:
             player = self.players[player_id]
             if not player.alive or not player.spike:
                 continue
-                
-            # Check if at a valid plant site
             at_plant_site = self._is_at_plant_site(player.location)
-            
+            print(f"[DEBUG] _process_spike_actions: at_plant_site={at_plant_site}, player.is_planting={player.is_planting}, self.spike_planted={self.spike_planted}")
+            if at_plant_site and not player.is_planting and not self.spike_planted:
+                player.start_plant(self)
             if player.is_planting and at_plant_site:
                 player.plant_progress += time_step
-                
-                # Complete planting
+                print(f"[DEBUG] _process_spike_actions: player.plant_progress={player.plant_progress}")
                 if player.plant_progress >= PLANT_TIME:
+                    print(f"[DEBUG] _process_spike_actions: player.plant_progress={player.plant_progress}, PLANT_TIME={PLANT_TIME}")
                     self.spike_planted = True
                     self.spike_plant_time = self.tick
                     self.spike_position = player.location
                     player.spike = False
-                    player.is_planting = False
+                    player.stop_plant(self)
                     player.plants += 1
                     self.spike_time_remaining = SPIKE_TIMER
-                    
-                    # Log planting event
                     self._log_spike_planted(player_id)
-                    
-                    # Update spike info in blackboards
                     plant_site = self._position_to_site(player.location)
                     spike_info = {
                         "location": player.location,
@@ -579,107 +580,82 @@ class Round:
                     }
                     self.attacker_blackboard.update_spike_info(**spike_info)
                     self.defender_blackboard.update_spike_info(**spike_info)
-                    
-                    # Change defenders strategy to "retake" if spike is planted
                     def_igl = random.choice(self.defender_ids)
                     self.defender_blackboard.set_strategy(
                         "retake", 
                         def_igl,
                         plant_site
                     )
-                    
-                    # Change attackers strategy to "post_plant"
                     att_igl = random.choice(self.attacker_ids)
                     self.attacker_blackboard.set_strategy(
                         "post_plant", 
                         att_igl,
                         plant_site
                     )
-            elif not player.is_planting and at_plant_site and not self.spike_planted:
-                # Start planting
-                player.is_planting = True
-                player.plant_progress = 0.0
-                
-                # Notify team that planting is starting
-                self.attacker_blackboard.add_warning(
-                    f"Spike being planted by {player.name}", 
-                    player.location
-                )
-            elif player.is_planting and not at_plant_site:
-                # Cancel planting if moved away
-                player.is_planting = False
-                player.plant_progress = 0.0
-        
+            if player.is_planting and not at_plant_site:
+                player.stop_plant(self)
         # Handle spike defusing
         if self.spike_planted:
             for player_id in self.defender_ids:
                 player = self.players[player_id]
                 if not player.alive:
                     continue
-                    
-                # Check if at the spike
                 at_spike = self._is_near_spike(player.location)
-                
+                if at_spike and not player.is_defusing:
+                    player.start_defuse(self)
                 if player.is_defusing and at_spike:
                     player.defuse_progress += time_step
-                    
-                    # Complete defusing
                     if player.defuse_progress >= DEFUSE_TIME:
                         self.spike_planted = False
-                        player.is_defusing = False
+                        player.stop_defuse(self)
                         player.defuses += 1
                         self.round_winner = RoundWinner.DEFENDERS
                         self.round_end_condition = RoundEndCondition.SPIKE_DEFUSED
                         self.phase = RoundPhase.END
-                        
-                        # Log defusing event
                         self._log_spike_defused(player_id)
-                        
-                        # Update spike info in blackboards
                         spike_info = {
                             "status": "defused",
                         }
                         self.attacker_blackboard.update_spike_info(**spike_info)
                         self.defender_blackboard.update_spike_info(**spike_info)
-                elif not player.is_defusing and at_spike:
-                    # Start defusing
-                    player.is_defusing = True
-                    player.defuse_progress = 0.0
-                    
-                    # Notify team that defusing is starting
-                    self.defender_blackboard.add_warning(
-                        f"Spike being defused by {player.name}", 
-                        player.location
-                    )
-                elif player.is_defusing and not at_spike:
-                    # Cancel defusing if moved away
-                    player.is_defusing = False
-                    player.defuse_progress = 0.0
+                if player.is_defusing and not at_spike:
+                    print(f"[DEBUG] {player_id} canceled defusing (moved away)")
+                    player.stop_defuse(self)
     
     def _is_at_plant_site(self, location: Tuple[float, float]) -> bool:
         """Check if the location is at a valid plant site."""
-        plant_sites = self.map_data.get("plant_sites", [])
-        for site in plant_sites:
+        loc2d = location[:2] if len(location) >= 2 else location
+        plant_sites = self.map_data.get("plant_sites", {})
+        for site in plant_sites.values():
             site_center = site.get("center", (0, 0))
+            center2d = site_center[:2] if len(site_center) >= 2 else site_center
             site_radius = site.get("radius", 10.0)
-            
-            distance = self._calculate_distance(location, site_center)
+            distance = self._calculate_distance(loc2d, center2d)
+            print(f"[DEBUG] _is_at_plant_site: loc2d={loc2d}, center2d={center2d}, radius={site_radius}, distance={distance}")
             if distance <= site_radius:
+                print(f"[DEBUG] _is_at_plant_site: INSIDE site (distance {distance} <= {site_radius})")
                 return True
-                
+        print(f"[DEBUG] _is_at_plant_site: NOT at any site")
         return False
     
     def _is_near_spike(self, location: Tuple[float, float]) -> bool:
         """Check if the location is near the planted spike."""
         if not self.spike_position:
             return False
-            
-        distance = self._calculate_distance(location, self.spike_position)
+        loc2d = location[:2] if len(location) >= 2 else location
+        spike2d = self.spike_position[:2] if len(self.spike_position) >= 2 else self.spike_position
+        distance = self._calculate_distance(loc2d, spike2d)
+        print(f"[DEBUG] _is_near_spike: loc2d={loc2d}, spike2d={spike2d}, distance={distance}")
         return distance <= 3.0  # Defuse range
     
-    def _calculate_distance(self, point1: Tuple[float, float], point2: Tuple[float, float]) -> float:
-        """Calculate the distance between two points."""
-        return math.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
+    def _calculate_distance(self, point1: Tuple[float, ...], point2: Tuple[float, ...]) -> float:
+        """Calculate the distance between two points (2D or 3D)."""
+        # Pad to 3D if needed
+        if len(point1) == 2:
+            point1 = (point1[0], point1[1], 0.0)
+        if len(point2) == 2:
+            point2 = (point2[0], point2[1], 0.0)
+        return math.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2 + (point1[2] - point2[2])**2)
     
     def _update_vision_and_sound(self) -> None:
         """Update what each player can see and hear."""
@@ -890,7 +866,8 @@ class Round:
                     continue
                     
                 # Simulate combat outcome
-                self._simulate_duel(player_id, enemy_id)
+                if not player.weapon == None:
+                    self._simulate_duel(player_id, enemy_id)
     
     def _simulate_duel(self, player1_id: str, player2_id: str) -> None:
         """Simulate a duel between two players and determine the outcome."""
@@ -908,9 +885,11 @@ class Round:
         if random_factor < player1_win_prob:
             # Player 1 wins
             self._handle_player_death(player2_id, player1_id)
+            print(f"[DEBUG] _simulate_duel: Player 1 wins.")
         else:
             # Player 2 wins
             self._handle_player_death(player1_id, player2_id)
+            print(f"[DEBUG] _simulate_duel: Player 2 wins.")
     
     def _calculate_combat_advantage(self, player_id: str, opponent_id: str) -> float:
         """Calculate a player's combat advantage against an opponent."""
@@ -1035,13 +1014,13 @@ class Round:
         attackers_alive = sum(1 for pid in self.attacker_ids if self.players[pid].alive)
         defenders_alive = sum(1 for pid in self.defender_ids if self.players[pid].alive)
         
-        if attackers_alive == 0:
-            # All attackers eliminated
+        if attackers_alive == 0 and not self.spike_planted:
+            # All attackers eliminated before spike plant
             self.round_winner = RoundWinner.DEFENDERS
             self.round_end_condition = RoundEndCondition.ELIMINATION
             self.phase = RoundPhase.END
-        elif defenders_alive == 0:
-            # All defenders eliminated
+        elif defenders_alive == 0 and not self.spike_planted:
+            # All defenders eliminated before spike plant
             self.round_winner = RoundWinner.ATTACKERS
             self.round_end_condition = RoundEndCondition.ELIMINATION
             self.phase = RoundPhase.END
@@ -1412,7 +1391,6 @@ class Round:
             self.round_winner = RoundWinner.ATTACKERS
             self.round_end_condition = RoundEndCondition.SPIKE_DETONATION
             self.phase = RoundPhase.END
-    
     def _log_death_event(
         self, victim_id: str, killer_id: str, weapon: str, is_headshot: bool
     ) -> None:
@@ -1945,3 +1923,39 @@ class Round:
             state["round_credits"] += player.kills * KILL_CREDITS
 
         return carryover
+
+    def notify_planting_started(self, player):
+        """Called when a player starts planting the spike."""
+        self.attacker_blackboard.add_warning(
+            f"Spike being planted by {player.name}",
+            player.location
+        )
+        # Optionally, set a flag or update map state if needed
+        # self.planting_in_progress = True
+        print(f"[ROUND] Planting started by {player.id} at {player.location}")
+
+    def notify_planting_stopped(self, player):
+        """Called when a player stops planting the spike."""
+        self.attacker_blackboard.add_warning(
+            f"Spike planting stopped by {player.name}",
+            player.location
+        )
+        # Optionally, clear a flag or update map state if needed
+        # self.planting_in_progress = False
+        print(f"[ROUND] Planting stopped by {player.id} at {player.location}")
+
+    def notify_defusing_started(self, player):
+        """Called when a player starts defusing the spike."""
+        self.defender_blackboard.add_warning(
+            f"Spike being defused by {player.name}",
+            player.location
+        )
+        print(f"[ROUND] Defusing started by {player.id} at {player.location}")
+
+    def notify_defusing_stopped(self, player):
+        """Called when a player stops defusing the spike."""
+        self.defender_blackboard.add_warning(
+            f"Spike defusing stopped by {player.name}",
+            player.location
+        )
+        print(f"[ROUND] Defusing stopped by {player.id} at {player.location}")
