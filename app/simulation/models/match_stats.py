@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple, Any
 import statistics
 from .player_stats import PlayerMatchStats
-from .team_stats import EnhancedTeamStats, TeamStats
+from .team_stats import EnhancedTeamStats
 from datetime import datetime, timedelta
 
 

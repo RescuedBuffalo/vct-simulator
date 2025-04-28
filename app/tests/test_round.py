@@ -345,6 +345,7 @@ def test_integration_round_setup_and_buy():
     """Integration test: load map, spawn players, and simulate buy phase purchases."""
     from app.simulation.models.round import Round, RoundPhase
     from app.simulation.models.map import MapLayout
+    from app.simulation.models.player import Player
     from app.simulation.models.blackboard import Blackboard
     import os
     # Use the Ascent map if available, else fallback to minimal
@@ -364,11 +365,13 @@ def test_integration_round_setup_and_buy():
     attacker_ids = []
     defender_ids = []
     for i in range(5):
-        p = DummyPlayer(f"a{i}", "attackers")
+        p = Player(id=f"a{i}", name=f"A{i}", team_id="attackers", role="duelist", agent="Jett", aim_rating=50, reaction_time=200, movement_accuracy=50, spray_control=50, clutch_iq=50)
+        p.creds = 3900  # Ensure enough credits for a weapon
         players[p.id] = p
         attacker_ids.append(p.id)
     for i in range(5):
-        p = DummyPlayer(f"d{i}", "defenders")
+        p = Player(id=f"d{i}", name=f"D{i}", team_id="defenders", role="sentinel", agent="Sage", aim_rating=50, reaction_time=200, movement_accuracy=50, spray_control=50, clutch_iq=50)
+        p.creds = 3900  # Ensure enough credits for a weapon
         players[p.id] = p
         defender_ids.append(p.id)
     round_obj = Round(
@@ -384,9 +387,6 @@ def test_integration_round_setup_and_buy():
     for pid in attacker_ids + defender_ids:
         loc = players[pid].location
         assert isinstance(loc, tuple) and len(loc) >= 2
-    # Give each player credits so they can buy
-    for p in players.values():
-        p.creds = 3900
     # Simulate end of buy phase
     round_obj.buy_phase_time = 0
     round_obj._process_buy_phase(time_step=0.1)
@@ -397,7 +397,7 @@ def test_integration_round_setup_and_buy():
         # Shield can be None, 'light', or 'heavy'
         assert player.shield in (None, 'light', 'heavy')
     # Round should now be in ROUND phase
-    assert round_obj.phase == RoundPhase.ROUND 
+    assert round_obj.phase == RoundPhase.ROUND
 
 def test_match_overtime():
     """Test that match correctly enters and resolves overtime."""
@@ -663,4 +663,90 @@ def test_integration_shield_drop_and_pickup():
     
     assert attacker.shield == "heavy"
     # Light shield should now be on the ground
-    assert any(s.shield_type == "light" for s in round_obj.dropped_shields) 
+    assert any(s.shield_type == "light" for s in round_obj.dropped_shields)
+
+def test_agent_selection_phase():
+    from app.simulation.models.match import Match
+    from app.simulation.models.map import Map
+    from app.simulation.models.round import Round
+    from app.simulation.models.team import Team
+    from app.simulation.models.player import Player
+    from app.simulation.models.blackboard import Blackboard
+    # Create 2 teams of 5 players each
+    players_a = [Player(id=f"a{i}", name=f"A{i}", team_id="attackers", role="duelist", agent=None, aim_rating=50, reaction_time=200, movement_accuracy=50, spray_control=50, clutch_iq=50) for i in range(5)]
+    players_b = [Player(id=f"d{i}", name=f"D{i}", team_id="defenders", role="sentinel", agent=None, aim_rating=50, reaction_time=200, movement_accuracy=50, spray_control=50, clutch_iq=50) for i in range(5)]
+    team_a = Team(id="attackers", name="Attackers", players=players_a)
+    team_b = Team(id="defenders", name="Defenders", players=players_b)
+    # Minimal map and round
+    map_data = {"attacker_spawns": [(0.0, 0.0, 0.0)], "defender_spawns": [(10.0, 0.0, 0.0)], "walls": {}, "plant_sites": {}}
+    round_obj = Round(
+        round_number=1,
+        players={p.id: p for p in players_a + players_b},
+        attacker_ids=[p.id for p in players_a],
+        defender_ids=[p.id for p in players_b],
+        map_data=map_data,
+        attacker_blackboard=Blackboard("attackers"),
+        defender_blackboard=Blackboard("defenders"),
+    )
+    match = Match(Map("TestMap", 20, 20), round_obj, team_a, team_b)
+    # Call agent selection
+    match.agent_selection_phase()
+    # All players should have a non-None agent
+    for p in players_a + players_b:
+        assert p.agent is not None
+        assert isinstance(p.agent, str)
+        assert len(p.agent) > 0
+
+def test_match_timeouts():
+    from app.simulation.models.match import Match
+    from app.simulation.models.map import Map
+    from app.simulation.models.round import Round
+    from app.simulation.models.team import Team
+    from app.simulation.models.player import Player
+    from app.simulation.models.blackboard import Blackboard
+    class DummyAbilities:
+        def reset_charges(self):
+            pass
+        def get_available_abilities(self):
+            return []
+    # Create 2 teams of 5 players each
+    players_a = [Player(id=f"a{i}", name=f"A{i}", team_id="attackers", role="duelist", agent="Jett", aim_rating=50, reaction_time=200, movement_accuracy=50, spray_control=50, clutch_iq=50) for i in range(5)]
+    players_b = [Player(id=f"d{i}", name=f"D{i}", team_id="defenders", role="sentinel", agent="Sage", aim_rating=50, reaction_time=200, movement_accuracy=50, spray_control=50, clutch_iq=50) for i in range(5)]
+    # Assign dummy abilities to all players
+    for p in players_a + players_b:
+        p.abilities = DummyAbilities()
+    team_a = Team(id="attackers", name="Attackers", players=players_a)
+    team_b = Team(id="defenders", name="Defenders", players=players_b)
+    # Minimal map and round
+    map_data = {"attacker_spawns": [(0.0, 0.0, 0.0)], "defender_spawns": [(10.0, 0.0, 0.0)], "walls": {}, "plant_sites": {}}
+    round_obj = Round(
+        round_number=1,
+        players={p.id: p for p in players_a + players_b},
+        attacker_ids=[p.id for p in players_a],
+        defender_ids=[p.id for p in players_b],
+        map_data=map_data,
+        attacker_blackboard=Blackboard("attackers"),
+        defender_blackboard=Blackboard("defenders"),
+    )
+    match = Match(Map("TestMap", 20, 20), round_obj, team_a, team_b)
+    # Initial timeouts
+    assert match.timeouts_remaining[team_a.id] == 1
+    assert match.timeouts_remaining[team_b.id] == 1
+    # Call timeout for team_a
+    assert match.call_timeout(team_a.id) is True
+    assert match.timeouts_remaining[team_a.id] == 0
+    assert match.timeout_pending == team_a.id
+    # Timeout should pause match progression
+    match.timeout_timer = 2.0  # Simulate a short timeout for test
+    steps = 0
+    while match.timeout_pending:
+        match.run()  # Should decrement timer and eventually clear timeout
+        steps += 1
+        if steps > 10:
+            break
+    assert match.timeout_pending is None
+    # Can't call another timeout for team_a
+    assert match.call_timeout(team_a.id) is False
+    # Team_b can still call theirs
+    assert match.call_timeout(team_b.id) is True
+    assert match.timeouts_remaining[team_b.id] == 0 

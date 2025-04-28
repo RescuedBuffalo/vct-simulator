@@ -205,6 +205,8 @@ class Round:
         self._damage_events: List[Dict] = []
         self._utility_events: List[Dict] = []
         self._purchase_events: List[Dict] = []
+        self.kill_count = 0
+        self.print_kills = False
     
     def _update_alive_players_in_blackboards(self) -> None:
         """Update the blackboards with currently alive players."""

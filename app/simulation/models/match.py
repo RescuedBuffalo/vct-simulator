@@ -51,6 +51,40 @@ class Match:
         self.match_start_time = 0.0
         self.match_end_time = 0.0
 
+        self.timeouts_remaining = {team_a.id: 1, team_b.id: 1}  # 1 timeout per team by default
+        self.timeout_duration = 60.0  # 60 seconds simulation time
+        self.timeout_pending = None  # None or team_id if a timeout is pending
+        self.timeout_timer = 0.0
+
+    def agent_selection_phase(self, agent_choices: dict = None):
+        """
+        Assign agents to all players before the match starts.
+        agent_choices: Optional dict mapping player_id to agent name. If not provided, assign randomly.
+        """
+        import random
+        AGENTS = ["Jett", "Sage", "Phoenix", "Brimstone", "Viper", "Omen", "Sova", "Reyna", "Killjoy", "Cypher"]
+        all_players = self.team_a.players + self.team_b.players
+        assigned_agents = set()
+        for player in all_players:
+            if agent_choices and player.id in agent_choices:
+                player.agent = agent_choices[player.id]
+            else:
+                # Assign a random agent not already taken (if possible)
+                available = [a for a in AGENTS if a not in assigned_agents]
+                if not available:
+                    available = AGENTS  # allow duplicates if all taken
+                player.agent = random.choice(available)
+            assigned_agents.add(player.agent)
+
+    def call_timeout(self, team_id):
+        """Call a timeout for the given team if available."""
+        if self.timeouts_remaining.get(team_id, 0) > 0 and self.timeout_pending is None:
+            self.timeout_pending = team_id
+            self.timeout_timer = self.timeout_duration
+            self.timeouts_remaining[team_id] -= 1
+            return True
+        return False
+
     def run(self):
         # Constants
         ROUNDS_TO_WIN = 13
@@ -74,7 +108,18 @@ class Match:
         attacker_blackboard = self.round.attacker_blackboard
         defender_blackboard = self.round.defender_blackboard
 
+        # Agent selection phase before first round
+        self.agent_selection_phase()
+
         while True:
+            # Handle timeout if pending
+            if self.timeout_pending:
+                if self.timeout_timer > 0:
+                    self.timeout_timer -= 1.0  # Simulate 1s per loop iteration (or adjust as needed)
+                    continue  # Pause match progression during timeout
+                else:
+                    self.timeout_pending = None
+
             # Regulation end or win conditions
             if not self.is_overtime:
                 # Win in regulation
