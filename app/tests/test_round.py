@@ -367,9 +367,7 @@ def test_spike_plant_success():
     attacker.start_plant(round_obj)
     
     for _ in range(10):
-        print(f"[DEBUG] update started..")
         round_obj.update(time_step)
-        print(f"[DEBUG] update complete.")
         
     assert round_obj.spike_planted
     assert not attacker.spike

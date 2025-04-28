@@ -656,11 +656,12 @@ class MatchStats:
         else:
             return []
     
-    def get_match_summary(self) -> Dict:
+    def get_match_summary(self, write_to_file: bool = False) -> Dict:
         """Get a comprehensive summary of the match."""
         mvp_id, mvp_stats = self.get_mvp()
         
-        return {
+
+        summary = {
             "score": f"{self.team_a_stats.rounds_won}-{self.team_b_stats.rounds_won}",
             "winner": "team_a" if self.team_a_stats.rounds_won > self.team_b_stats.rounds_won else "team_b",
             "duration": self.match_duration,
@@ -677,6 +678,13 @@ class MatchStats:
             "team_b_summary": self.team_b_stats.get_summary(),
             "player_stats": {pid: stats.get_summary() for pid, stats in self.player_stats.items()}
         }
+
+        if write_to_file:
+            import json
+            with open(f"../summaries/match_stats_{self.map_name}.json", "w") as f:
+                json.dump(summary, f)
+
+        return summary
     
     def _is_clutch_situation(self, round_number: int, team: str) -> bool:
         """Check if a player is in a clutch situation."""
@@ -818,11 +826,16 @@ class MatchStats:
         # Check if match went to overtime
         self.is_overtime = self.total_rounds > 24  # Standard match is max 24 rounds
     
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self, write_to_file: bool = False) -> Dict[str, Any]:
         """Get a summary of match stats."""
         team1_stats_summary = self.team_a_stats.get_summary() if hasattr(self.team_a_stats, 'get_summary') else {}
         team2_stats_summary = self.team_b_stats.get_summary() if hasattr(self.team_b_stats, 'get_summary') else {}
-        
+
+        if write_to_file:
+            import json
+            with open(f"summaries/match_stats_{self.map_name}.json", "w") as f:
+                json.dump(self.get_summary(write_to_file=True), f)
+
         return {
             "map": self.map_name,
             "duration": str(timedelta(seconds=int(self.duration))) if self.duration else None,

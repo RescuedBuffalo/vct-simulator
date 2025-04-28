@@ -296,11 +296,11 @@ class PlayerMatchStats:
             return 0.0
         return (self.retakes_won / self.retakes_participated) * 100.0
     
-    def get_summary(self) -> Dict:
+    def get_summary(self, write_to_file: bool = False, name: str = None) -> Dict:
         """Return a summary of the player's performance."""
         self.update_ratios()
-        
-        return {
+
+        summary = {
             "kda": f"{self.kills}/{self.deaths}/{self.assists}",
             "kd_ratio": round(self.kill_death_assist_ratio, 2),
             "acs": round(self.average_combat_score, 1),
@@ -311,4 +311,11 @@ class PlayerMatchStats:
             "entry_success": f"{self.entry_success}/{self.entry_attempts}",
             "utility_damage": self.damage_by_utility,
             "eco_impact": self.eco_kills - self.eco_deaths
-        } 
+        }
+
+        if write_to_file:
+            import json
+            with open(f"../summaries/player_stats_{name}.json", "w") as f:
+                json.dump(summary, f)
+
+        return summary

@@ -380,11 +380,11 @@ class EnhancedTeamStats:
             
         return result
 
-    def get_summary(self) -> Dict:
+    def get_summary(self, write_to_file: bool = False) -> Dict:
         """Return a summary of the team's performance."""
         eco_performance = self.get_eco_round_performance()
-        
-        return {
+
+        summary = {
             "score": f"{self.rounds_won}-{self.rounds_lost}",
             "win_rate": round(self.get_win_rate(), 1),
             "side_win_rates": {
@@ -423,6 +423,13 @@ class EnhancedTeamStats:
             "total_entry_kills": self.total_entry_kills,
             "total_entry_deaths": self.total_entry_deaths
         }
+
+        if write_to_file:
+            import json
+            with open(f"../summaries/team_stats_{self.team_name}.json", "w") as f:
+                json.dump(summary, f)
+
+        return summary
     
     def _update_attack_timing_stats(self, time_remaining: float):
         """Update attack timing statistics."""

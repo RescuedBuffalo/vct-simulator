@@ -79,6 +79,10 @@ def test_full_valorant_game_simulation():
 
     # 10. Print or assert on the final score and stats
     print(f"Final Score: Team A {match.team_a_score} - Team B {match.team_b_score}")
-    print("Match Stats:", match.get_detailed_match_stats())
+    match.get_detailed_match_stats(write_to_file=True)
+    match.stats.team_a_stats.get_summary(write_to_file=True)
+    match.stats.team_b_stats.get_summary(write_to_file=True)
+    for player_id, player_stats in match.stats.player_stats.items():
+        player_stats.get_summary(write_to_file=True, name=player_id)
     assert match.team_a_score >= 0 and match.team_b_score >= 0
     assert match.team_a_score != match.team_b_score or match.is_overtime 

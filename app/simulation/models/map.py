@@ -532,7 +532,6 @@ class Map:
             if not os.path.exists(data):
                 raise FileNotFoundError(f"Map file not found: {data}")
             with open(data, 'r') as f:
-                print(f"[DEBUG] Loading map from.")
                 data = json.load(f)
         # Now data is a dict
         metadata = data.get("metadata", {})
@@ -642,7 +641,6 @@ class Map:
     def is_within_bomb_site(self, x: float, y: float, z: float = 0.0) -> Optional[str]:
         """Check if a position is within a bomb site."""
         for name, site in self.bomb_sites.items():
-            print(f"[DEBUG] Checking if {x}, {y}, {z} is within {name} with type {type(site)}")
             if site.contains_point(x, y, z):
                 return name
         return None

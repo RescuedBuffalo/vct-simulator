@@ -278,9 +278,9 @@ class Match:
     def get_match_summary(self) -> MatchResult:
         return MatchResult(self.team_a_score, self.team_b_score)
     
-    def get_detailed_match_stats(self) -> Dict:
+    def get_detailed_match_stats(self, write_to_file: bool = False) -> Dict:
         """Get detailed match statistics."""
-        return self.stats.get_match_summary()
+        return self.stats.get_match_summary(write_to_file=write_to_file)
 
     def get_round_summary(self) -> RoundResult:
         return self.round_results[self.current_round]
