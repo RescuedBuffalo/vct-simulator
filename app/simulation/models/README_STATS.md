@@ -1,108 +1,168 @@
-# Advanced Match Statistics System
+# Statistics System Documentation
 
-This directory contains the implementation of the advanced statistics tracking system for the Valorant simulation. The system is designed to collect, process, and analyze detailed statistics from matches, similar to professional match analytics but with even more depth.
+The VCT simulator includes a comprehensive statistics tracking system spread across three main components: Player Stats, Team Stats, and Match Stats.
 
-## Overview
+## Player Statistics (`player_stats.py`)
 
-The statistics system consists of several components:
+### Core Metrics
+- **Combat Performance**
+  - K/D/A (Kills/Deaths/Assists)
+  - Headshot percentage
+  - First blood rate
+  - Trade kill efficiency
+  - Average damage per round (ADR)
+  - Clutch success rate
 
-1. **Player Statistics** (`player_stats.py`): Tracks detailed player-level metrics including kills, deaths, assists, damage, economy, and advanced metrics.
-2. **Team Statistics** (`team_stats.py`): Tracks team-level metrics such as round wins/losses, site preferences, economy performance, and utility usage.
-3. **Match Statistics** (`match_stats.py`): Manages both player and team statistics and provides a unified view of the entire match.
-4. **Statistics Collection**: Integrated into the `Round` and `Match` classes to collect events during simulation.
-5. **Statistics Viewing** (`view_match_stats.py`): Command-line tool to view and analyze match statistics.
-6. **Statistics Saving** (`save_match_stats.py`): Utility to save match statistics to JSON files for later analysis.
+- **Economy Management**
+  - Average credits per round
+  - Buy round success rate
+  - Eco round impact
+  - Weapon preference patterns
+  - Save round effectiveness
 
-## Key Metrics
+- **Utility Usage**
+  - Ability usage frequency
+  - Flash assist rate
+  - Damage from abilities
+  - Site entry success rate
+  - Ultimate point generation
 
-### Player Level Metrics
-
-- **Combat Metrics**: Kills, deaths, assists, headshots, damage dealt/received
-- **Objective Metrics**: Plants, defuses, first bloods
-- **Economic Metrics**: Credits spent/earned, weapon purchases
-- **Multi-kills**: Tracking 2K, 3K, 4K, and 5K rounds
-- **Entry Performance**: Entry attempts and success rate
-- **Clutch Performance**: Clutch attempts and success rate
-- **Utility Usage**: Utility damage, enemies flashed, blind duration caused
-- **Advanced Stats**: Kill/Death/Assist ratio, Average Combat Score, damage per round
-
-### Team Level Metrics
-
-- **Round Performance**: Win rates by side (attack/defense)
-- **Site Performance**: Site preferences, plant/defuse success rates
-- **Economic Rounds**: Performance in eco, bonus, and full-buy rounds
-- **Multi-round Stats**: Flawless rounds, thrifty rounds, consecutive rounds
-- **Trade Efficiency**: Effectiveness of trade kills
-- **Time Stats**: Average round duration on attack/defense, plant timing
-- **Retake Performance**: Retake attempts and success rates
-
-### Match Level Metrics
-
-- **Timeline Events**: Complete timeline of kills, plants, defuses, damage
-- **Round Analysis**: Detailed breakdown of each round
-- **MVP Tracking**: Identification of top performers
-- **Match Stats**: Total rounds, overtime rounds, match duration
-
-## Using the Statistics System
-
-### In Match Simulations
-
-The statistics collection is integrated into the simulation. To enable full statistics tracking, use these steps:
-
+### Usage Example
 ```python
-from app.simulation.models.match import Match
-from app.simulation.models.map import Map
-from app.simulation.models.team import Team
-from app.simulation.models.player import Player
-from app.simulation.models.round import Round
+# Access player stats
+player_stats = player.stats
 
-# Create match as usual
-match = Match(map_obj, round_obj, team_a, team_b)
+# Combat metrics
+kda = player_stats.get_kda_ratio()
+adr = player_stats.get_average_damage_per_round()
+hs_pct = player_stats.get_headshot_percentage()
 
-# Run the match
-match.run()
-
-# Get detailed match statistics
-match_stats = match.get_detailed_match_stats()
-
-# Save statistics to a file
-from app.save_match_stats import save_match_stats
-stats_file = save_match_stats(match_stats)
-print(f"Match statistics saved to {stats_file}")
+# Economy analysis
+eco_impact = player_stats.calculate_eco_round_impact()
+buy_success = player_stats.get_buy_round_success_rate()
 ```
 
-### Viewing Match Statistics
+## Team Statistics (`team_stats.py`)
 
-After a match, you can analyze the statistics using the view_match_stats.py script:
+### Team Performance Metrics
+- **Round Statistics**
+  - Attack/Defense round win rates
+  - Post-plant win percentage
+  - Retake success rate
+  - Round conversion rate
+  - Timeout effectiveness
 
-```bash
-python app/view_match_stats.py path/to/match_stats.json
+- **Economy Tracking**
+  - Team economy rating
+  - Force buy success rate
+  - Save round coordination
+  - Equipment value efficiency
+  - Ultimate economy management
+
+- **Strategic Metrics**
+  - Site hit preferences
+  - Rotation timing
+  - Trade efficiency
+  - Map control percentage
+  - Utility coordination score
+
+### Implementation
+```python
+# Team performance analysis
+team_stats = team.stats
+
+# Round analysis
+attack_wr = team_stats.get_attack_win_rate()
+defense_wr = team_stats.get_defense_win_rate()
+post_plant = team_stats.get_post_plant_win_rate()
+
+# Strategic analysis
+site_pref = team_stats.get_site_hit_distribution()
+trade_eff = team_stats.calculate_trade_efficiency()
 ```
 
-Options:
-- `--summary`: Show only a brief match summary
-- `--export FILE`: Export statistics to a different file format
+## Match Statistics (`match_stats.py`)
 
-## Customizing the Statistics System
+### Match Analysis
+- **Overall Performance**
+  - Round distribution
+  - Score progression
+  - Side advantage calculation
+  - Momentum shifts
+  - Critical rounds identification
 
-The statistics system is designed to be extensible. To add new metrics:
+- **Comparative Analysis**
+  - Team economy differentials
+  - Utility usage comparison
+  - Site control heat maps
+  - Duelist performance comparison
+  - Support impact analysis
 
-1. Add the new metric to `PlayerMatchStats` or `EnhancedTeamStats` as appropriate
-2. Update the corresponding `record_*` methods in `MatchStats` to collect the metric
-3. Add event tracking in `Round` class where appropriate
-4. Update the statistics processing in `Match._process_round_statistics()`
+- **Time-based Analysis**
+  - Round duration patterns
+  - Spike plant timing
+  - Rotation speed
+  - First contact timing
+  - Ultimate usage timing
 
-## Implementation Notes
+### Data Collection
+```python
+# Match analysis
+match_stats = match.stats
 
-- The system uses a event-based approach where events (kills, plants, etc.) are logged during simulation.
-- Statistics are calculated both during the match and in a post-processing step after the match completes.
-- The statistics model is inspired by professional Valorant analytics, but expanded with custom metrics.
-- For efficiency, some advanced metrics are calculated lazily when requested rather than maintained in real-time.
+# Performance analysis
+score_prog = match_stats.get_score_progression()
+momentum = match_stats.analyze_momentum_shifts()
+economy_diff = match_stats.get_economy_differential()
+
+# Detailed round analysis
+round_summary = match_stats.get_round_summary(round_number)
+```
+
+## Integration Points
+
+### Real-time Updates
+Statistics are updated in real-time during simulation:
+1. Combat events trigger stat updates
+2. Round end triggers aggregation
+3. Match end compiles final statistics
+
+### Data Export
+Statistics can be exported in various formats:
+- JSON for data analysis
+- CSV for spreadsheet analysis
+- Formatted reports for presentation
+
+### Visualization Support
+The stats system supports various visualization methods:
+- Heat maps for positioning
+- Time series for performance
+- Radar charts for player comparison
+- Bar graphs for round analysis
+
+## Best Practices
+
+1. **Consistent Updates**
+   - Update stats immediately after events
+   - Use appropriate aggregation methods
+   - Maintain data consistency across stats objects
+
+2. **Performance Optimization**
+   - Cache frequently accessed metrics
+   - Use efficient data structures
+   - Implement lazy calculation for complex metrics
+
+3. **Data Validation**
+   - Verify stat updates
+   - Check for reasonable ranges
+   - Handle edge cases appropriately
 
 ## Future Enhancements
 
-- **Heat Maps**: Player positioning and kill locations
-- **Economy Analysis**: Detailed economy simulation and tracking
-- **Machine Learning Integration**: Predictive models based on statistics
-- **Web Visualization**: Interactive web-based statistics viewer
-- **Real-Time Analysis**: Stream statistics during simulation for live analysis 
+Planned improvements to the stats system:
+- Advanced performance metrics
+- Machine learning integration
+- Real-time analysis tools
+- Enhanced visualization options
+- Custom metric definition support
+- Historical trend analysis 

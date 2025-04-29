@@ -925,82 +925,93 @@ class Round:
                 if not player.weapon == None:
                     self._simulate_duel(player_id, enemy_id)
     
-    def _simulate_duel(self, player1_id: str, player2_id: str) -> None:
-        """Simulate a duel between two players and determine the outcome."""
+    def _simulate_duel(self, player1_id: str, player2_id: str, accuracy_modifier: float = 1.0) -> None:
+        """Simulate a duel between two players with enhanced mechanics."""
         player1 = self.players[player1_id]
         player2 = self.players[player2_id]
         
-        # Calculate combat advantage based on equipment, position, and stats
-        player1_advantage = self._calculate_combat_advantage(player1_id, player2_id)
-        player2_advantage = self._calculate_combat_advantage(player2_id, player1_id)
+        # Get weapon stats
+        weapon = None
+        if hasattr(self, 'weapon_catalog'):
+            weapon = self.weapon_catalog.get(player1.weapon)
         
-        # Determine winner based on advantage and random factor
-        random_factor = random.random()
-        player1_win_prob = player1_advantage / (player1_advantage + player2_advantage)
+        # Calculate combat advantage
+        advantage = self._calculate_combat_advantage(player1_id, player2_id)
         
-        if random_factor < player1_win_prob:
-            # Player 1 wins
-            self._handle_player_death(player2_id, player1_id)
+        # Apply accuracy modifier
+        advantage *= accuracy_modifier
+        
+        # Apply weapon stats if available
+        if weapon:
+            # Range-based damage
+            distance = self._calculate_distance(player1.location, player2.location)
+            range_type = "close" if distance < 10 else "medium" if distance < 25 else "long"
+            damage_multiplier = weapon.range_multipliers.get(range_type, 1.0)
+            
+            # Calculate damage
+            base_damage = weapon.damage * damage_multiplier
+            
+            # Armor penetration
+            if player2.shield:
+                armor_damage = base_damage * (1 - weapon.armor_penetration)
+                health_damage = base_damage * weapon.armor_penetration
+            else:
+                armor_damage = 0
+                health_damage = base_damage
+            
+            # Apply damage
+            if player2.shield:
+                player2.armor = max(0, player2.armor - int(armor_damage))
+            player2.health = max(0, player2.health - int(health_damage))
+            
+            # Track damage
+            player1.damage_dealt += int(armor_damage + health_damage)
+            
+            # Check for kill
+            if player2.health <= 0:
+                self._handle_player_death(player2_id, player1_id, weapon=player1.weapon)
         else:
-            # Player 2 wins
-            self._handle_player_death(player1_id, player2_id)
-    
+            # Fallback to simple combat if no weapon system
+            if random.random() < advantage:
+                self._handle_player_death(player2_id, player1_id, weapon=player1.weapon)
+
     def _calculate_combat_advantage(self, player_id: str, opponent_id: str) -> float:
-        """Calculate a player's combat advantage against an opponent."""
+        """Calculate combat advantage with enhanced mechanics."""
         player = self.players[player_id]
         opponent = self.players[opponent_id]
         
         # Base advantage from aim rating
-        advantage = player.aim_rating
+        advantage = player.aim_rating / 100.0
         
-        # Weapon advantage
-        weapon_tiers = {
-            "Operator": 5.0,
-            "Vandal": 4.0,
-            "Phantom": 4.0,
-            "Bulldog": 3.0,
-            "Guardian": 3.5,
-            "Spectre": 2.5,
-            "Stinger": 2.0,
-            "Marshal": 3.0,
-            "Sheriff": 2.5,
-            "Ghost": 2.0,
-            "Classic": 1.0,
-            "Shorty": 1.5,
-            "Frenzy": 1.8,
-            None: 0.5, # Melee only
-        }
-        
-        weapon_advantage = weapon_tiers.get(player.weapon, 1.0)
-        advantage *= weapon_advantage
-        
-        # Armor advantage
-        armor_multiplier = 1.0
-        if player.shield == "heavy":
-            armor_multiplier = 1.3
-        elif player.shield == "light":
-            armor_multiplier = 1.15
-            
-        advantage *= armor_multiplier
+        # Movement accuracy penalty
+        if player.is_moving:
+            advantage *= player.movement_accuracy / 100.0
         
         # Status effects
         if "flashed" in player.status_effects:
-            advantage *= 0.2  # Severe penalty when flashed
+            advantage *= 0.2
         if "slowed" in player.status_effects:
-            advantage *= 0.8  # Minor penalty when slowed
-            
-        # Movement penalty (if moving while shooting)
-        is_moving = player.velocity[0] != 0 or player.velocity[1] != 0
-        if is_moving:
-            advantage *= (0.5 + 0.5 * player.movement_accuracy)
-            
-        # First engagement advantage (surprise factor)
+            advantage *= 0.8
+        
+        # First shot advantage
         if opponent_id not in player.visible_enemies:
             advantage *= 1.5
-            
-        return max(0.1, advantage)  # Ensure minimum advantage
-    
-    def _handle_player_death(self, victim_id: str, killer_id: str) -> None:
+        
+        # Positional advantage (height)
+        height_diff = player.location[2] - opponent.location[2]
+        if height_diff > 0.5:  # Player has height advantage
+            advantage *= 1.2
+        
+        # Distance factor
+        distance = self._calculate_distance(player.location, opponent.location)
+        if distance < 5.0:  # Close range
+            advantage *= 0.9  # Slightly harder to track at very close range
+        elif distance > 30.0:  # Long range
+            advantage *= 0.8  # Harder at long range
+        
+        return advantage
+
+    def _handle_player_death(self, victim_id: str, killer_id: str, weapon: str = None) -> None:
         """Handle a player's death."""
         victim = self.players[victim_id]
         killer = self.players[killer_id]
@@ -1027,7 +1038,7 @@ class Round:
             
         # Log death event
         is_headshot = random.random() < 0.3  # 30% chance of headshot
-        self._log_death_event(victim_id, killer_id, killer.weapon, is_headshot)
+        self._log_death_event(victim_id, killer_id, weapon, is_headshot)
         
         # Check team elimination
         self._check_team_elimination()
@@ -1696,302 +1707,87 @@ class Round:
         # For now, implement a simple placeholder logic
         return random.random() < 0.1  # 10% chance to use ability each check
 
-    def _use_ability(self, player_id: str, ability: AbilityInstance) -> None:
-        """Use an ability in the simulation."""
+    def _use_ability(self, player_id: str, ability_name: str, target_location: Tuple[float, float], charge_time: float = 0.0) -> None:
+        """Handle ability usage with proper mechanics."""
         player = self.players[player_id]
-        
-        # Determine target position based on targeting type
-        target_pos = self._determine_ability_target(player_id, ability)
-        if not target_pos:
+        if not player.alive or ability_name not in player.abilities:
             return
             
-        # Update ability state
-        ability.charges_remaining -= 1
-        ability.is_active = True
-        ability.current_position = target_pos
-        ability.start_time = self.tick
-        ability.end_time = self.tick + ability.definition.duration
+        ability = player.abilities[ability_name]
+        if not ability.is_available():
+            return
+            
+        # Convert 2D target to 3D
+        target_3d = (target_location[0], target_location[1], 0.0)
+        
+        # Calculate direction from player to target
+        player_pos = player.location
+        dx = target_3d[0] - player_pos[0]
+        dy = target_3d[1] - player_pos[1]
+        dz = target_3d[2] - player_pos[2]
+        
+        # Normalize direction
+        length = math.sqrt(dx*dx + dy*dy + dz*dz)
+        if length > 0:
+            direction = (dx/length, dy/length, dz/length)
+        else:
+            direction = (1.0, 0.0, 0.0)  # Default forward direction
+        
+        # Activate the ability
+        ability.activate(
+            current_time=self.tick,
+            origin=player_pos,
+            direction=direction
+        )
         
         # Add to active abilities
         self.active_abilities.append(ability)
         
         # Log ability usage
-        self._log_info_event(
-            player_id,
-            None,
-            target_pos,
-            "ability",
-            {"type": "use", "ability": ability.definition.name}
-        )
-        
-        # Track utility usage for statistics
-        player_pos = self.players[player_id].location[:2] if len(self.players[player_id].location) >= 2 else (0.0, 0.0)
-        
-        # Count affected players (simplified)
-        enemies_affected = 0
-        teammates_affected = 0
-        
-        if ability.ability_type in ["flash", "smoke", "molly"]:
-            # Simple radius check for affected players
-            affect_radius = {
-                "flash": 10.0,
-                "smoke": 5.0,
-                "molly": 5.0
-            }.get(ability.ability_type, 3.0)
-            
-            for pid, other_player in self.players.items():
-                if not other_player.alive:
-                    continue
-                    
-                other_pos = other_player.location[:2] if len(other_player.location) >= 2 else (0.0, 0.0)
-                distance = self._calculate_distance(player_pos, other_pos)
-                
-                if distance <= affect_radius:
-                    if (player_id in self.attacker_ids and pid in self.defender_ids) or \
-                       (player_id in self.defender_ids and pid in self.attacker_ids):
-                        enemies_affected += 1
-                    elif pid != player_id:  # Don't count self
-                        teammates_affected += 1
-        
         self._log_utility_usage(
             player_id=player_id,
-            utility_type=ability.ability_type,
+            utility_type=ability.definition.ability_type.value,
             position=player_pos,
-            enemies_affected=enemies_affected,
-            teammates_affected=teammates_affected
+            enemies_affected=0,  # Will be updated when ability affects players
+            teammates_affected=0
         )
-
-    def _determine_ability_target(
-        self, player_id: str, ability: AbilityInstance
-    ) -> Optional[Tuple[float, float]]:
-        """Determine where to target an ability based on current situation."""
-        player = self.players[player_id]
-        is_attacker = player_id in self.attacker_ids
-        team_blackboard = self.attacker_blackboard if is_attacker else self.defender_blackboard
-        
-        # Get current strategy
-        strategy = team_blackboard.get("current_strategy")
-        if not strategy:
-            return None
-            
-        # Different targeting logic based on ability type and targeting type
-        if ability.definition.targeting_type == AbilityTarget.POINT:
-            # For point-targeted abilities, use strategic locations
-            return self._get_strategic_point(player_id, ability, strategy)
-        elif ability.definition.targeting_type == AbilityTarget.PROJECTILE:
-            # For projectiles, consider trajectory and bounces
-            return self._get_projectile_target(player_id, ability, strategy)
-        elif ability.definition.targeting_type == AbilityTarget.SELF:
-            # Self-targeted abilities use player's current position
-            return player.location
-        elif ability.definition.targeting_type == AbilityTarget.AREA:
-            # Area abilities need to consider coverage and team positioning
-            return self._get_area_target(player_id, ability, strategy)
-            
-        return None
-
-    def _get_strategic_point(
-        self, player_id: str, ability: AbilityInstance, strategy: Any
-    ) -> Optional[Tuple[float, float]]:
-        """Get a strategic point on the map for ability use."""
-        target_site = None
-        if strategy and hasattr(strategy, 'target_site'):
-            target_site = strategy.target_site
-            
-        # Default to a random site if no specific target
-        if not target_site:
-            if self.map and self.map.bomb_sites:
-                target_site = random.choice(list(self.map.bomb_sites.keys()))
-            else:
-                plant_sites = self.map_data.get("plant_sites", {})
-                if plant_sites:
-                    target_site = random.choice(list(plant_sites.keys()))
-            
-        if target_site:
-            # Get site info
-            if self.map and target_site in self.map.bomb_sites:
-                site = self.map.bomb_sites[target_site]
-                site_center = (site["x"] + site["w"]/2, site["y"] + site["h"]/2)
-                return site_center
-            elif self.map_data:
-                # Legacy fallback
-                site_info = self.map_data.get("plant_sites", {}).get(strategy.target_site, {})
-                if site_info and "center" in site_info:
-                    return site_info["center"]
-                
-        # Fallback: return player position
-        player = self.players.get(player_id)
-        if player:
-            return (player.location[0], player.location[1])
-            
-        return None
-
-    def _get_projectile_target(
-        self, player_id: str, ability: AbilityInstance, strategy: Any
-    ) -> Optional[Tuple[float, float]]:
-        """Calculate target for projectile abilities considering bounces."""
-        # This would implement complex trajectory calculations
-        # For now, return a simple target
-        player = self.players[player_id]
-        return (
-            player.location[0] + random.uniform(-ability.definition.max_range, ability.definition.max_range),
-            player.location[1] + random.uniform(-ability.definition.max_range, ability.definition.max_range)
-        )
-
-    def _get_area_target(
-        self, player_id: str, ability: AbilityInstance, strategy: Any
-    ) -> Optional[Tuple[float, float]]:
-        """Determine target for area-effect abilities."""
-        # This would consider team positions and map control
-        # For now, return a simple target
-        if strategy.target_site:
-            site_info = self.map_data.get("plant_sites", {}).get(strategy.target_site, {})
-            return site_info.get("center", None)
-        return None
 
     def _update_utility(self, time_step: float) -> None:
-        """Update active ability effects on the map."""
+        """Update active abilities with proper mechanics."""
         current_time = self.tick
         
-        # Update and filter out expired abilities
+        # Update and filter active abilities
         active_abilities = []
         for ability in self.active_abilities:
             if ability.get_remaining_duration(current_time) > 0:
+                # Update ability state
+                ability.update(time_step, current_time, self.map, list(self.players.values()))
                 active_abilities.append(ability)
                 
-                # Apply ability effects based on type
-                if ability.definition.ability_type == AbilityType.SMOKE:
-                    # Smoke just blocks vision, handled in line of sight checks
-                    pass
-                elif ability.definition.ability_type == AbilityType.FLASH:
-                    self._apply_flash_effect(ability)
-                elif ability.definition.ability_type == AbilityType.MOLLY:
-                    self._apply_molly_effect(ability, time_step)
-                elif ability.definition.ability_type == AbilityType.RECON:
-                    self._apply_recon_effect(ability)
-                elif ability.definition.ability_type == AbilityType.TRAP:
-                    self._check_trap_trigger(ability)
+                # Track affected players
+                if ability.effect_applied:
+                    enemies_affected = 0
+                    teammates_affected = 0
+                    ability_owner = self.players[ability.owner_id]
                     
+                    for pid in ability.affected_players:
+                        if pid in self.players:
+                            affected_player = self.players[pid]
+                            if (ability_owner.id in self.attacker_ids) == (affected_player.id in self.attacker_ids):
+                                teammates_affected += 1
+                            else:
+                                enemies_affected += 1
+                    
+                    # Update utility stats
+                    self._log_utility_usage(
+                        player_id=ability.owner_id,
+                        utility_type=ability.definition.ability_type.value,
+                        position=ability.current_position3d or ability.origin,
+                        enemies_affected=enemies_affected,
+                        teammates_affected=teammates_affected
+                    )
+        
         self.active_abilities = active_abilities
-
-    def _apply_flash_effect(self, flash: AbilityInstance) -> None:
-        """Apply flash effects to players looking at the flash."""
-        for player_id, player in self.players.items():
-            if not player.alive:
-                continue
-                
-            # Check if player is within flash radius
-            distance = self._calculate_distance(player.location, flash.current_position)
-            if distance <= flash.definition.effect_radius:
-                # In a more complex implementation, we would check if player is looking at flash
-                if "flashed" not in player.status_effects:
-                    player.status_effects.append("flashed")
-                    
-                    # Log info event
-                    self._log_info_event(
-                        flash.owner_id,
-                        player_id,
-                        player.location,
-                        "ability",
-                        {"type": "flash", "ability": flash.definition.name}
-                    )
-
-    def _apply_molly_effect(self, molly: AbilityInstance, time_step: float) -> None:
-        """Apply damage and slow effects to players in molly radius."""
-        for player_id, player in self.players.items():
-            if not player.alive:
-                continue
-                
-            # Check if player is in molly
-            distance = self._calculate_distance(player.location, molly.current_position)
-            if distance <= molly.definition.effect_radius:
-                # Apply damage
-                damage = molly.definition.damage * time_step
-                player.health -= damage
-                
-                # Apply status effects
-                for effect in molly.definition.status_effects:
-                    if effect not in player.status_effects:
-                        player.status_effects.append(effect)
-                
-                # Check if player died from molly
-                if player.health <= 0:
-                    self._handle_player_death(
-                        player_id,
-                        molly.owner_id,
-                        ability_used=molly.definition.name
-                    )
-
-    def _apply_recon_effect(self, recon: AbilityInstance) -> None:
-        """Reveal enemies hit by recon ability."""
-        owner = self.players[recon.owner_id]
-        is_attacker = recon.owner_id in self.attacker_ids
-        enemy_ids = self.defender_ids if is_attacker else self.attacker_ids
-        
-        for enemy_id in enemy_ids:
-            enemy = self.players[enemy_id]
-            if not enemy.alive:
-                continue
-                
-            # Check if enemy is hit by recon
-            distance = self._calculate_distance(enemy.location, recon.current_position)
-            if distance <= recon.definition.effect_radius:
-                # Add to affected players
-                recon.affected_players.add(enemy_id)
-                
-                # Reveal enemy position to all teammates
-                owner_team_ids = self.attacker_ids if is_attacker else self.defender_ids
-                for teammate_id in owner_team_ids:
-                    self.players[teammate_id].known_enemy_positions[enemy_id] = enemy.location
-                    
-                # Log reveal event
-                self._log_info_event(
-                    recon.owner_id,
-                    enemy_id,
-                    enemy.location,
-                    "ability",
-                    {"type": "reveal", "ability": recon.definition.name}
-                )
-
-    def _check_trap_trigger(self, trap: AbilityInstance) -> None:
-        """Check if any enemies trigger a trap ability."""
-        is_attacker_trap = trap.owner_id in self.attacker_ids
-        enemy_ids = self.defender_ids if is_attacker_trap else self.attacker_ids
-        
-        for enemy_id in enemy_ids:
-            enemy = self.players[enemy_id]
-            if not enemy.alive:
-                continue
-                
-            # Check if enemy triggers trap
-            distance = self._calculate_distance(enemy.location, trap.current_position)
-            if distance <= trap.definition.effect_radius and enemy_id not in trap.affected_players:
-                # Trigger trap effects
-                trap.affected_players.add(enemy_id)
-                
-                # Apply status effects
-                for effect in trap.definition.status_effects:
-                    if effect not in enemy.status_effects:
-                        enemy.status_effects.append(effect)
-                
-                # Apply damage if any
-                if trap.definition.damage > 0:
-                    enemy.health -= trap.definition.damage
-                    if enemy.health <= 0:
-                        self._handle_player_death(
-                            enemy_id,
-                            trap.owner_id,
-                            ability_used=trap.definition.name
-                        )
-                
-                # Log trap trigger event
-                self._log_info_event(
-                    trap.owner_id,
-                    enemy_id,
-                    enemy.location,
-                    "ability",
-                    {"type": "trap_trigger", "ability": trap.definition.name}
-                )
 
     def get_carryover_state(self, loss_bonus_attackers: int = None, loss_bonus_defenders: int = None) -> Dict:
         """

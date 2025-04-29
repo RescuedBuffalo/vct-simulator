@@ -1,58 +1,159 @@
 # Simulation Models
 
-This directory contains the core simulation models for the Valorant-like tactical FPS simulator.
+This directory contains the core simulation models for the VCT (Valorant Champions Tour) simulator. Each model represents a key component of the tactical FPS simulation system.
+
+## Core Models Overview
+
+### Player (`player.py`)
+The `Player` class represents an individual player in the simulation with:
+- Identity: ID, name, team, role, and agent type
+- Combat stats: aim rating, reaction time, movement accuracy, spray control
+- Physics: location, direction, velocity, acceleration
+- Status: health, armor, alive status, planting/defusing state
+- Movement states: walking, crouching, jumping, falling
+
+### Team (`team.py`)
+The `Team` class manages a group of players:
+- Team identity and roster management
+- Team-wide statistics tracking
+- Ability and ultimate charge management
+- Economy and buy strategy coordination
+
+### Match (`match.py`)
+The `Match` class orchestrates full game simulations:
+- Round management and scoring
+- Team side switching
+- Overtime handling
+- Match statistics collection
+- Timeout and pause management
+
+### Round (`round.py`)
+The `Round` class handles individual round simulation:
+- Buy phase management
+- Combat interactions
+- Movement and positioning
+- Ability usage
+- Spike plant/defuse mechanics
+- Round state transitions
+
+## Combat and Equipment Models
+
+### Weapon (`weapon.py`)
+Defines all weapon characteristics:
+- Damage models and falloff
+- Fire rates and accuracy
+- Movement penalties
+- Economy costs
+- Ammunition and reload mechanics
+
+### Ability (`ability.py`)
+Models agent abilities and their effects:
+- Ability types (flash, smoke, molly, etc.)
+- Duration and cooldowns
+- Area of effect calculations
+- Status effect application
+- Interaction with game state
+
+## Statistics and Analytics
+
+### PlayerStats (`player_stats.py`)
+Tracks individual player performance:
+- Kill/Death/Assist counts
+- Damage dealt/received
+- Economy management
+- Ability usage effectiveness
+- Round impact scores
+
+### TeamStats (`team_stats.py`)
+Aggregates team-level statistics:
+- Round win rates
+- Site control percentages
+- Economy management
+- Utility usage patterns
+- Overall performance metrics
+
+### MatchStats (`match_stats.py`)
+Comprehensive match statistics:
+- Round-by-round analysis
+- Player performance comparisons
+- Economy tracking
+- Map control patterns
+- Critical moment identification
+
+## Environment and State Management
+
+### Map (`map.py`)
+Handles the game environment:
+- Map geometry and collision
+- Line of sight calculations
+- Sound propagation
+- Tactical positions
+- Navigation mesh
+
+### Blackboard (`blackboard.py`)
+Manages shared knowledge and state:
+- Team information sharing
+- Strategy coordination
+- Enemy position tracking
+- Economy status
+- Round state awareness
 
 ## Field of Vision (FOV) System
 
-The FOV system simulates what players can see during gameplay, similar to Valorant's mechanics. It's implemented in the `Map` class and is used to:
+The FOV system simulates what players can see during gameplay:
 
-1. Determine which enemies are visible to each player
-2. Control ability effects like flashes
-3. Provide realistic information to AI decision-making
+### Core Features
+- 110° vision cone by default
+- Wall and obstacle occlusion
+- Smoke and flash effects
+- Distance-based visibility
 
-### How FOV Works
-
-The system considers:
-- Each player's facing direction (110° cone of vision by default)
-- Occlusion by walls and other obstacles (via raycasting)
-- Effects that block vision (smokes)
-- Distance limitations (max visibility range)
-
-### Using the FOV System
-
-To update player visibility in your simulation loop:
-
+### Usage Example
 ```python
-# In your simulation update method:
 def update(self, time_step):
-    # Update player positions, handle inputs, etc.
-    
-    # Then update visibility for all players
+    # Update player positions
     self.map.update_player_visibility(self.players)
     
-    # Now each player.visible_enemies contains IDs of visible enemies
-    # Use this for AI decision making, etc.
+    # Access visible enemies
+    for player in self.players:
+        visible_enemies = player.visible_enemies
 ```
 
-For special effects like flashes, check the `is_looking_at_player` property:
+## Data Flow and Interaction
 
-```python
-# Example for flash effect
-def apply_flash(self, flash_origin, players):
-    for player in players:
-        if player.is_looking_at_player:
-            # Apply stronger flash effect if looking at flash source
-            player.status_effects.append("flashed")
-```
+The models interact in the following hierarchy:
+1. `Match` contains multiple `Round` instances
+2. `Round` manages `Player` and `Team` interactions
+3. `Player` uses `Weapon` and `Ability` instances
+4. `Map` provides the environment for all interactions
+5. `Blackboard` facilitates information sharing
+6. Stats classes (`PlayerStats`, `TeamStats`, `MatchStats`) observe and record
 
-### Custom FOV Parameters
+## Extension Points
 
-You can customize the FOV parameters:
-- `fov_angle`: Width of the vision cone in degrees (default: 110°)
-- `max_distance`: Maximum visibility distance (default: 50 units)
+The system is designed for extensibility:
+- New weapon types can be added to `weapon.py`
+- Additional abilities can be defined in `ability.py`
+- Custom stats tracking can be implemented in stats classes
+- Map features can be extended in `map.py`
+- AI behavior can be modified via `blackboard.py`
 
-Example:
-```python
-# For a player with reduced vision (e.g., partially flashed)
-visible = map.calculate_player_fov(player, all_players, fov_angle=60, max_distance=30)
-``` 
+## Best Practices
+
+When working with these models:
+1. Always use the appropriate stats class for data collection
+2. Update FOV calculations each simulation step
+3. Maintain proper round state transitions
+4. Handle ability interactions through the proper channels
+5. Use the blackboard for team coordination
+6. Respect the physics and movement constraints
+
+## Future Enhancements
+
+Planned improvements include:
+- Enhanced ability interactions
+- More sophisticated economy management
+- Advanced team tactics modeling
+- Improved performance analytics
+- Additional map features
+- Extended stats collection 

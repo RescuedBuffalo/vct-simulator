@@ -11,13 +11,11 @@ class AbilityType(Enum):
     FLASH = "flash"
     SMOKE = "smoke"
     MOLLY = "molly"
-    STIM = "stim"
-    HEAL = "heal"
     RECON = "recon"
-    DISPLACEMENT = "displacement"  # Abilities that move players (e.g., Jett updraft)
-    VISION_BLOCK = "vision_block"  # One-way smokes, walls
-    TRAP = "trap"  # Cypher trips, Killjoy alarmbot
-    ULTIMATE = "ultimate"
+    TRAP = "trap"
+    HEAL = "heal"
+    MOVEMENT = "movement"
+    COMBAT = "combat"
 
 class AbilityTarget(Enum):
     """How an ability is targeted."""
@@ -59,7 +57,7 @@ class AbilityDefinition:
     healing: float = 0.0  # Healing amount for healing abilities
     
     # Special Effects
-    status_effects: Set[str] = field(default_factory=set)  # e.g., "flashed", "slowed", "vulnerable"
+    status_effects: List[str] = field(default_factory=list)  # e.g., "flashed", "slowed", "vulnerable"
     blocks_vision: bool = False
     reveals_enemies: bool = False
     destroyable: bool = False
@@ -89,6 +87,16 @@ class AbilityDefinition:
         # Default geometry parameters for circle
         if self.shape == 'circle' and not self.shape_params:
             self.shape_params = (self.effect_radius,)
+        if not self.status_effects:
+            # Set default status effects based on type
+            if self.ability_type == AbilityType.FLASH:
+                self.status_effects = ["flashed"]
+            elif self.ability_type == AbilityType.SMOKE:
+                self.status_effects = ["smoked"]
+            elif self.ability_type == AbilityType.MOLLY:
+                self.status_effects = ["burning"]
+            elif self.ability_type == AbilityType.TRAP:
+                self.status_effects = ["revealed"]
 
     def create_instance(self, owner_id: str) -> 'AbilityInstance':
         """Factory to create a fresh ability instance for a given owner."""
