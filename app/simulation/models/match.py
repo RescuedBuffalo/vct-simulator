@@ -203,17 +203,17 @@ class Match:
             for pid, state in carryover.items():
                 player = players[pid]
                 if state["plants"] > 0:
-                    if pid in self.team_a.alive_players:
+                    if pid in self.team_a.get_alive_players():
                         self.team_a.increment_player_ult(pid)
                     else:
                         self.team_b.increment_player_ult(pid)
                 if state["defuses"] > 0:
-                    if pid in self.team_a.alive_players:
+                    if pid in self.team_a.get_alive_players():
                         self.team_a.increment_player_ult(pid)
                     else:
                         self.team_b.increment_player_ult(pid)
                 if state["kills"] > 0:
-                    if pid in self.team_a.alive_players:
+                    if pid in self.team_a.get_alive_players():
                         self.team_a.increment_player_ult(pid, state["kills"])
                     else:
                         self.team_b.increment_player_ult(pid, state["kills"])

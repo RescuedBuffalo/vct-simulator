@@ -10,6 +10,7 @@ class MockPlayer:
         self.location = location  # (x, y, z)
         self.health = 100
         self.status_effects = []
+        self.view_direction = (1, 0, 0)  # Default looking right
     def apply_damage(self, dmg):
         self.health -= dmg
 

@@ -105,9 +105,9 @@ def test_greedy_agent_decide_action_idle():
     assert isinstance(action, dict)
     assert action["action_type"] in {"idle", "move", "communicate"}
     # Should not try to buy, plant, or defuse
-    assert not action["buy"]
-    assert not action["plant"]
-    assert not action["defuse"]
+    assert "buy" not in action
+    assert "plant" not in action
+    assert "defuse" not in action
 
 def test_greedy_agent_decide_action_buy():
     player, round_obj, team_blackboard = make_minimal_round_and_player()

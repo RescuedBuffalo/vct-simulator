@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
-from ..simulation.ai.agents.rl import RLAgent, ObservationSpace, ActionSpace
+from ..simulation.ai.agents.rl_agent import RLAgent
+from ..simulation.ai.training.spaces import ObservationSpace, ActionSpace
 from ..simulation.models.game_state import GameState
 from ..simulation.models.player import Player
 from ..simulation.models.team import Team
@@ -8,16 +9,39 @@ from ..simulation.models.team import Team
 @pytest.fixture
 def game_state():
     """Create a mock game state for testing."""
-    state = GameState()
-    team_a = Team("Team A", "Attackers")
-    team_b = Team("Team B", "Defenders")
+    team_a = Team(id="Team A", name="Attackers", validate_size=False)
+    team_b = Team(id="Team B", name="Defenders", validate_size=False)
     
     # Add some players to each team
+    roles = ["duelist", "controller", "sentinel", "initiator", "duelist"]
+    agents = ["Jett", "Sage", "Phoenix", "Brimstone", "Viper"]
     for i in range(5):
-        team_a.add_player(Player(f"player_a{i}", team_a))
-        team_b.add_player(Player(f"player_b{i}", team_b))
+        team_a.add_player(Player(
+            id=f"player_a{i}",
+            name=f"Player A{i}",
+            team_id="Team A",
+            role=roles[i],
+            agent=agents[i],
+            aim_rating=75.0,
+            reaction_time=200.0,
+            movement_accuracy=0.8,
+            spray_control=0.7,
+            clutch_iq=0.6
+        ))
+        team_b.add_player(Player(
+            id=f"player_b{i}",
+            name=f"Player B{i}",
+            team_id="Team B",
+            role=roles[i],
+            agent=agents[i],
+            aim_rating=75.0,
+            reaction_time=200.0,
+            movement_accuracy=0.8,
+            spray_control=0.7,
+            clutch_iq=0.6
+        ))
     
-    state.teams = [team_a, team_b]
+    state = GameState(teams=[team_a, team_b])
     return state
 
 @pytest.fixture
@@ -35,7 +59,7 @@ def test_observation_space_shape():
     obs_space = ObservationSpace()
     
     # Check observation space dimensions
-    assert obs_space.shape == (256,)  # Example size, adjust based on actual implementation
+    assert obs_space.shape == (29,)  # Actual size based on components
     assert obs_space.low.shape == obs_space.shape
     assert obs_space.high.shape == obs_space.shape
     

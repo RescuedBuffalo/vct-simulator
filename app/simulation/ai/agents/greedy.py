@@ -24,8 +24,15 @@ class GreedyAgent(BaseAgent):
         """
         Decide the next action based on current observation and personality traits.
         """
+        # Base action without buy field
+        action = {'action_type': 'idle'}
+        
+        # Add buy field only in buy phase
+        if observation['phase'] == 'buy':
+            action['buy'] = {}
+        
         if not observation['alive']:
-            return {'action_type': 'idle'}
+            return action
             
         # Buy phase logic
         if observation['phase'] == 'buy':
@@ -48,7 +55,7 @@ class GreedyAgent(BaseAgent):
     def _decide_buy(self, observation: Dict) -> Dict:
         """Decide what equipment to buy."""
         if observation['creds'] < 1000:
-            return {'action_type': 'idle'}
+            return {'action_type': 'idle', 'buy': {}}
             
         buy_action = {'action_type': 'buy', 'buy': {'shield': None}}
         
@@ -72,17 +79,23 @@ class GreedyAgent(BaseAgent):
     def _decide_combat(self, observation: Dict) -> Dict:
         """Decide combat actions based on personality."""
         # Aggressive agents shoot more readily
-        if self.weights['aggression'] > random.random():
-            return {
+        if self.weights['aggression'] > 0.3:  # Lower threshold to make shooting more likely
+            action = {
                 'action_type': 'shoot',
                 'shoot': {'target_id': observation['visible_enemies'][0]}
             }
-            
-        # Patient agents may hold fire or retreat
-        if self.weights['patience'] > random.random():
-            return self._decide_movement(observation, retreat=True)
-            
-        return {'action_type': 'idle'}
+        else:
+            # Patient agents may hold fire or retreat
+            if self.weights['patience'] > random.random():
+                return self._decide_movement(observation, retreat=True)
+            else:
+                action = {'action_type': 'idle'}
+        
+        # Add buy field only in buy phase
+        if observation['phase'] == 'buy':
+            action['buy'] = {}
+        
+        return action
     
     def _decide_movement(self, observation: Dict, retreat: bool = False) -> Dict:
         """
@@ -101,7 +114,7 @@ class GreedyAgent(BaseAgent):
             # When retreating, bias towards backward movement
             direction = math.pi + random.uniform(-math.pi/4, math.pi/4)
         
-        return {
+        action = {
             'action_type': 'move',
             'move': {
                 'direction': direction,
@@ -109,20 +122,26 @@ class GreedyAgent(BaseAgent):
                 'is_crouching': should_walk and random.random() < self.weights['patience']
             }
         }
+        
+        # Add buy field only in buy phase
+        if observation['phase'] == 'buy':
+            action['buy'] = {}
+        
+        return action
     
     def _should_plant(self, observation: Dict) -> bool:
         """Decide whether to plant the spike."""
         return (
-            observation['spike'] and
-            observation['at_plant_site'] and
-            not observation['spike_planted']
+            observation.get('spike', False) and
+            observation.get('at_plant_site', False) and
+            not observation.get('spike_planted', False)
         )
     
     def _should_defuse(self, observation: Dict) -> bool:
         """Decide whether to defuse the spike."""
         return (
-            observation['spike_planted'] and
-            observation['at_spike']
+            observation.get('spike_planted', False) and
+            observation.get('at_spike', False)
         )
     
     def reset(self) -> None:

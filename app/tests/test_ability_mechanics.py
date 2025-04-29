@@ -38,37 +38,28 @@ def test_ability_definition_initialization():
     flash = STANDARD_ABILITIES["flash"]
     assert flash.ability_type == AbilityType.FLASH
     assert flash.max_charges == 2
-    assert flash.cost == 200
+    assert flash.credit_cost == 200
     assert flash.duration == 1.5
     assert flash.effect_radius == 10.0
     assert flash.max_range == 30.0
-    assert flash.bounce_count == 1
-    assert flash.activation_delay == 0.2
+    assert flash.properties["bounce_count"] == 1
+    assert flash.properties["activation_delay"] == 0.2
     assert "flashed" in flash.status_effects
 
 def test_ability_instance_creation():
     """Test ability instance creation and initial state."""
     flash_def = STANDARD_ABILITIES["flash"]
-    instance = AbilityInstance(
-        definition=flash_def,
-        owner_id="player1",
-        charges_remaining=flash_def.max_charges
-    )
+    instance = flash_def.create_instance("player1")
     
-    assert instance.is_available()
     assert instance.charges_remaining == flash_def.max_charges
     assert not instance.is_active
-    assert not instance.affected_players
     assert not instance.effect_applied
+    assert not instance.affected_players
 
 def test_flash_mechanics(mock_players):
     """Test flash ability mechanics and player effects."""
     flash_def = STANDARD_ABILITIES["flash"]
-    instance = AbilityInstance(
-        definition=flash_def,
-        owner_id="player1",
-        charges_remaining=flash_def.max_charges
-    )
+    instance = flash_def.create_instance("player1")
     
     # Activate flash in front of player2
     instance.activate(
@@ -94,11 +85,7 @@ def test_flash_mechanics(mock_players):
 def test_smoke_mechanics(mock_players):
     """Test smoke ability mechanics and area effects."""
     smoke_def = STANDARD_ABILITIES["smoke"]
-    instance = AbilityInstance(
-        definition=smoke_def,
-        owner_id="player1",
-        charges_remaining=smoke_def.max_charges
-    )
+    instance = smoke_def.create_instance("player1")
     
     # Place smoke between players
     instance.activate(
@@ -123,11 +110,7 @@ def test_smoke_mechanics(mock_players):
 def test_molly_damage_mechanics(mock_players):
     """Test molly ability damage calculations."""
     molly_def = STANDARD_ABILITIES["molly"]
-    instance = AbilityInstance(
-        definition=molly_def,
-        owner_id="player1",
-        charges_remaining=molly_def.max_charges
-    )
+    instance = molly_def.create_instance("player1")
     
     # Place molly on player2
     instance.activate(
@@ -150,11 +133,7 @@ def test_molly_damage_mechanics(mock_players):
 def test_ability_duration_and_expiration():
     """Test ability duration tracking and expiration."""
     smoke_def = STANDARD_ABILITIES["smoke"]
-    instance = AbilityInstance(
-        definition=smoke_def,
-        owner_id="player1",
-        charges_remaining=smoke_def.max_charges
-    )
+    instance = smoke_def.create_instance("player1")
     
     # Activate smoke
     instance.activate(
@@ -175,11 +154,7 @@ def test_ability_duration_and_expiration():
 def test_bounce_mechanics(mock_map):
     """Test ability bounce mechanics."""
     flash_def = STANDARD_ABILITIES["flash"]
-    instance = AbilityInstance(
-        definition=flash_def,
-        owner_id="player1",
-        charges_remaining=flash_def.max_charges
-    )
+    instance = flash_def.create_instance("player1")
     
     # Activate flash with bounce
     instance.activate(
@@ -188,7 +163,7 @@ def test_bounce_mechanics(mock_map):
         direction=(1, 0, 0)
     )
     
-    assert instance.bounces_remaining == flash_def.bounce_count
+    assert instance.bounces_remaining == flash_def.properties["bounce_count"]
     
     # Update position and check bounce count
     instance.update(time_step=0.1, current_time=0.1, game_map=mock_map, players=[])

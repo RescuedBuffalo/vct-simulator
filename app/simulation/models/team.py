@@ -27,55 +27,72 @@ class TeamStats:
 
 @dataclass
 class Team:
-    """Represents a team in a Valorant match."""
-    # Identity
+    """Represents a team in the game."""
     id: str
     name: str
-    
-    # Players
     players: List[Player] = field(default_factory=list)
-    igl_id: Optional[str] = None  # ID of the in-game leader
-    
-    # Team Knowledge and Communication
-    blackboard: Blackboard = field(default_factory=lambda: Blackboard(""))
-    
-    # Match State
-    is_attacking: bool = False
-    alive_players: Set[str] = field(default_factory=set)
-    stats: TeamStats = field(default_factory=TeamStats)
+    igl_id: Optional[str] = None  # In-game leader
+    blackboard: Optional[Blackboard] = None
+    total_kills: int = 0
+    total_deaths: int = 0
+    total_assists: int = 0
+    economy: Dict[str, int] = field(default_factory=lambda: {
+        'total_spent': 0,
+        'avg_per_round': 0,
+        'current_credits': 0
+    })
+    validate_size: bool = True  # Whether to validate team size
+    _alive_players: Set[str] = field(default_factory=set)  # Private field for alive players
     
     def __post_init__(self):
         """Initialize the team after creation."""
-        # Set team ID in blackboard
-        self.blackboard.team_id = self.id
+        # Initialize blackboard
+        self.blackboard = Blackboard(self.id)
+        
+        # Initialize alive players
+        self._alive_players = {p.id for p in self.players if p.alive}
         
         # Validate team size
-        if len(self.players) != 5:
+        if self.validate_size and len(self.players) != 5:
             raise ValueError("Team must have exactly 5 players")
-        
-        # If no IGL is designated, choose one based on highest clutch_iq
-        if not self.igl_id:
-            self.igl_id = max(self.players, key=lambda p: p.clutch_iq).id
-        
-        # Initialize alive players set
-        self.alive_players = {p.id for p in self.players}
-        
-        # Set team ID for all players
-        for player in self.players:
-            player.team_id = self.id
     
-    def get_igl(self) -> Optional[Player]:
-        """Get the in-game leader player object."""
-        return next((p for p in self.players if p.id == self.igl_id), None)
+    def add_player(self, player: Player):
+        """Add a player to the team."""
+        if player.team_id != self.id:
+            raise ValueError(f"Player {player.id} belongs to team {player.team_id}, not {self.id}")
+        self.players.append(player)
+        
+        # Validate team size after adding
+        if self.validate_size and len(self.players) > 5:
+            raise ValueError("Team cannot have more than 5 players")
+    
+    def remove_player(self, player_id: str):
+        """Remove a player from the team."""
+        self.players = [p for p in self.players if p.id != player_id]
+    
+    def get_player(self, player_id: str) -> Optional[Player]:
+        """Get a player by ID."""
+        for player in self.players:
+            if player.id == player_id:
+                return player
+        return None
     
     def get_alive_players(self) -> List[Player]:
-        """Get list of currently alive players."""
-        return [p for p in self.players if p.id in self.alive_players]
+        """Get all alive players on the team."""
+        return [p for p in self.players if p.id in self._alive_players]
     
-    def update_alive_players(self) -> None:
-        """Update the set of alive players based on player states."""
-        self.alive_players = {p.id for p in self.players if p.alive}
-        self.blackboard.set("alive_players", self.alive_players)
+    def get_dead_players(self) -> List[Player]:
+        """Get all dead players on the team."""
+        return [p for p in self.players if not p.alive]
+    
+    def get_players_by_role(self, role: str) -> List[Player]:
+        """Get all players with a specific role."""
+        return [p for p in self.players if p.role == role]
+    
+    def update_economy(self, round_spent: int):
+        """Update team economy stats."""
+        self.economy['total_spent'] += round_spent
+        self.economy['avg_per_round'] = self.economy['total_spent'] / max(1, len(self.players))
     
     def reset_for_round(self) -> None:
         """Reset team state for a new round."""
@@ -96,10 +113,24 @@ class Team:
             player.utility_active = []
         
         # Reset alive players set
-        self.alive_players = {p.id for p in self.players}
+        self._alive_players = {p.id for p in self.players}
         
         # Update blackboard
-        self.blackboard.clear_round_data()
+        if self.blackboard:
+            self.blackboard.clear_round_data()
+    
+    def __repr__(self) -> str:
+        return f"Team({self.name}, {len(self.players)} players, {len(self.get_alive_players())} alive)"
+    
+    def get_igl(self) -> Optional[Player]:
+        """Get the in-game leader player object."""
+        return next((p for p in self.players if p.id == self.igl_id), None)
+    
+    def update_alive_players(self) -> None:
+        """Update the set of alive players based on player states."""
+        self._alive_players = {p.id for p in self.players if p.alive}
+        if self.blackboard:
+            self.blackboard.set("alive_players", self._alive_players)
     
     def switch_side(self) -> None:
         """Switch between attacking and defending."""
