@@ -4,6 +4,7 @@ from typing import List, Dict, Tuple, Optional, Any, TYPE_CHECKING
 import json
 import random
 import math
+from app.simulation.models.map_pathfinding import NavigationMesh, PathFinder, CollisionDetector
 try:
     import pygame
 except ImportError:
@@ -521,6 +522,10 @@ class Map:
         self.defender_spawns = []     # List of defender spawn points
         # Dynamic effects currently active on this map
         self._active_effects: List[Dict] = []
+
+        self.nav_mesh = None
+        self.pathfinder = None
+        self.collision_detector = None
     
     @classmethod
     def from_json(cls, data) -> 'Map':
@@ -552,7 +557,7 @@ class Map:
                 wall_data["x"], wall_data["y"], 
                 wall_data["w"], wall_data["h"],
                 "wall", name, wall_data.get("elevation", 0),
-                wall_data.get("z", 0), wall_data.get("height_z", 3.0)
+                wall_data.get("z", 0), wall_data.get("height_z", 10.0)
             )
         # Load objects
         for name, obj_data in data.get("objects", {}).items():
@@ -561,25 +566,16 @@ class Map:
                     obj_data["x"], obj_data["y"], 
                     obj_data["w"], obj_data["h"],
                     "object", name, obj_data.get("elevation", 0),
-                    obj_data.get("z", 0), obj_data.get("height_z", 1.0)
+                    obj_data.get("z", 0), obj_data.get("height_z", 2.0)
                 )
         # Load stairs
         for name, stair_data in data.get("stairs", {}).items():
-            game_map.stairs[name] = MapBoundary(
-                stair_data["x"], stair_data["y"], 
-                stair_data["w"], stair_data["h"],
-                "stairs", name, stair_data.get("elevation", 0),
-                stair_data.get("z", 0), stair_data.get("height_z", 0.5)
-            )
+            game_map.stairs[name] = StairsBoundary(name, stair_data["x"], stair_data["y"], stair_data["w"], stair_data["h"]
+                                                   , stair_data["z"], stair_data["height_z"], stair_data["direction"], stair_data["steps"])
         # Load ramps
         for name, ramp_data in data.get("ramps", {}).items():
-            game_map.ramps[name] = MapBoundary(
-                ramp_data["x"], ramp_data["y"], 
-                ramp_data["w"], ramp_data["h"],
-                "ramp", name, ramp_data.get("elevation", 0),
-                ramp_data.get("z_start", 0), ramp_data.get("z_end", 1.0)
-            )
-            game_map.ramps[name].direction = ramp_data.get("direction", "north")
+            game_map.ramps[name] = RampBoundary(name, ramp_data["x"], ramp_data["y"], ramp_data["w"], ramp_data["h"]
+                                                , ramp_data["z_start"], ramp_data["z_end"], ramp_data["direction"])
         # Load bomb sites
         bomb_sites_data = data.get("bomb-sites", {})
         if isinstance(bomb_sites_data, dict):
@@ -591,7 +587,48 @@ class Map:
                     site_data.get("z", 0), site_data.get("height_z", 0.0)
                 )
         # If bomb-sites is a list (legacy), do nothing (handled elsewhere)
+
+        game_map.nav_mesh = cls.create_navigation_mesh(game_map)
+        game_map.collision_detector = CollisionDetector(game_map.nav_mesh)
+        game_map.pathfinder = PathFinder(game_map.nav_mesh)
+    
         return game_map
+
+    def create_navigation_mesh(self) -> NavigationMesh:
+        """Create a navigation mesh for this map."""
+        nav_mesh = NavigationMesh(self.width, self.height)
+        
+        # Add walls as obstacles
+        for wall in self.walls.values():
+            nav_mesh.add_obstacle(
+                wall.x, wall.y, wall.width, wall.height,
+                wall.z, wall.height_z
+            )
+        
+        # Add objects as obstacles
+        for obj in self.objects.values():
+            nav_mesh.add_obstacle(
+                obj.x, obj.y, obj.width, obj.height,
+                obj.z, obj.height_z
+            )
+        
+        # Set area elevations
+        for area in self.areas.values():
+            nav_mesh.set_elevation(
+                area.x, area.y, area.width, area.height,
+                area.elevation
+            )
+        
+        # Set stairs elevations
+        for stair in self.stairs.values():
+            nav_mesh.set_stairs_elevation(
+                stair.x, stair.y, stair.width, stair.height,
+                stair.z, stair.z + stair.height_z,
+                stair.direction
+            )
+        
+        return nav_mesh
+            
     
     def get_area_at_position(self, x: float, y: float, z: float = 0.0) -> Optional[str]:
         """Get the name of the area at the given position, preferring higher-elevation areas first."""
@@ -1025,88 +1062,67 @@ class Map:
         marker_area = MapArea(area_name, x, y, 1, 1, elevation)
         self.add_area(marker_area)
 
-    def calculate_player_fov(self, player: 'Player', all_players: List['Player'], 
+    def calculate_player_fov(self, source, all_players: List['Player'], 
                            fov_angle: float = 110.0, max_distance: float = 50.0) -> List['Player']:
         """
-        Calculate which players are visible within a player's field of vision.
-        
+        Calculate which players are visible within a source's field of vision.
         Args:
-            player: The player whose FOV we're calculating
+            source: The object whose FOV we're calculating (must have .location, may have .direction)
             all_players: List of all players in the game
             fov_angle: The field of view angle in degrees (default 110°)
             max_distance: Maximum distance a player can see
-            
         Returns:
-            List of players visible to the given player
+            List of players visible to the given source
         """
         visible_players = []
         
-        # Skip calculation if player is not alive
-        if not player.alive:
+        # Skip calculation if source is not alive (if it has that attribute)
+        if hasattr(source, 'alive') and not getattr(source, 'alive', True):
             return visible_players
         
-        # Convert player direction from degrees to radians
-        direction_rad = math.radians(player.direction)
-        
-        # Create unit vector for player's facing direction
+        # Use direction if present, else default to 0 (facing right)
+        direction_deg = getattr(source, 'direction', 0)
+        direction_rad = math.radians(direction_deg)
         facing_dir = (math.cos(direction_rad), math.sin(direction_rad), 0)
-        
-        # Half of the FOV angle in radians
         half_fov_rad = math.radians(fov_angle / 2)
+        px, py, pz = source.location
         
-        # Player's position
-        px, py, pz = player.location
-        
-        # Check each other player
         for other in all_players:
             # Skip self or dead players
-            if other.id == player.id or not other.alive:
+            if hasattr(source, 'id') and hasattr(other, 'id') and other.id == source.id:
                 continue
-                
-            # Vector from player to other
+            if hasattr(other, 'alive') and not other.alive:
+                continue
+            
             ox, oy, oz = other.location
             to_other = (ox - px, oy - py, oz - pz)
-            
-            # Distance to other player
             distance = math.sqrt(to_other[0]**2 + to_other[1]**2 + to_other[2]**2)
-            
-            # Skip if too far away
             if distance > max_distance:
                 continue
-                
-            # Normalize the to_other vector (for direction comparison)
             if distance > 0:
                 to_other_normalized = (to_other[0]/distance, to_other[1]/distance, to_other[2]/distance)
             else:
-                continue  # Skip if at same position (shouldn't happen)
-                
-            # Calculate dot product between facing direction and direction to other player
-            # This gives the cosine of the angle between the vectors
+                continue
             dot_product = (facing_dir[0] * to_other_normalized[0] + 
                            facing_dir[1] * to_other_normalized[1] + 
                            facing_dir[2] * to_other_normalized[2])
-            
-            # Cosine of half FOV angle
             cos_half_fov = math.cos(half_fov_rad)
-            
-            # Check if other player is within FOV cone
             if dot_product >= cos_half_fov:
-                # Now check if line of sight is clear using raycasting
                 hit_distance, hit_point, hit_object = self.raycast(
-                    player.location, 
+                    source.location, 
                     to_other_normalized, 
                     distance
                 )
-                
-                # Check if any smoke effects block vision
                 vision_blocked_by_smoke = False
-                for effect in player.utility_active + self._active_effects:
+                utility_active = getattr(source, 'utility_active', [])
+                _active_effects = getattr(self, '_active_effects', [])
+                for effect in utility_active + _active_effects:
                     if effect.get("type") == "smoke":
                         smoke_center = effect.get("position")
                         smoke_radius = effect.get("radius", 3.0)
                         if smoke_center:
                             sx, sy = smoke_center[0], smoke_center[1]
-                            ax, ay = player.location[0], player.location[1]
+                            ax, ay = source.location[0], source.location[1]
                             bx, by = other.location[0], other.location[1]
                             dx_line = bx - ax
                             dy_line = by - ay
@@ -1121,24 +1137,18 @@ class Map:
                             if dist <= smoke_radius:
                                 vision_blocked_by_smoke = True
                                 break
-                
-                # If raycast reaches the target distance without hitting a wall
-                # and vision is not blocked by smoke, then the player is visible
                 if (hit_distance is None or hit_distance >= distance) and not vision_blocked_by_smoke:
                     visible_players.append(other)
-                    
                     # Check if other player is looking back (for flash effects)
-                    other_direction_rad = math.radians(other.direction)
+                    other_direction_rad = math.radians(getattr(other, 'direction', 0))
                     other_facing = (math.cos(other_direction_rad), math.sin(other_direction_rad), 0)
                     to_player = (-to_other[0], -to_other[1], -to_other[2])
-                    
                     if distance > 0:
                         to_player_normalized = (to_player[0]/distance, to_player[1]/distance, to_player[2]/distance)
                         looking_back_dot = (other_facing[0] * to_player_normalized[0] +
                                            other_facing[1] * to_player_normalized[1] +
                                            other_facing[2] * to_player_normalized[2])
                         other.is_looking_at_player = (looking_back_dot >= cos_half_fov)
-                    
         return visible_players
 
     def update_player_visibility(self, players: List['Player']):

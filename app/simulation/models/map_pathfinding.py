@@ -27,16 +27,16 @@ class NavigationMesh:
         self.grid_width = int(width / cell_size)
         self.grid_height = int(height / cell_size)
         
-        # Initialize walkable grid
+        # Initialize walkable grid and elevation
         self.walkable = np.ones((self.grid_height, self.grid_width), dtype=bool)
-        
-        # Store elevation data
         self.elevation = np.zeros((self.grid_height, self.grid_width))
         
         # Store areas for lookup
         self.areas: Dict[str, Dict] = {}
+
+        self.collision_detector = None
         
-    def add_obstacle(self, x: float, y: float, w: float, h: float):
+    def add_obstacle(self, x: float, y: float, w: float, h: float, z: float = 0.0, height_z: float = 0.0):
         """Mark an area as non-walkable."""
         # Convert to grid coordinates
         grid_x = int(x / self.cell_size)
@@ -50,35 +50,68 @@ class NavigationMesh:
         grid_w = min(grid_w, self.grid_width - grid_x)
         grid_h = min(grid_h, self.grid_height - grid_y)
         
-        # Mark as non-walkable
+        # Mark as non-walkable and set elevation
         self.walkable[grid_y:grid_y+grid_h, grid_x:grid_x+grid_w] = False
+        if height_z > 0:
+            self.elevation[grid_y:grid_y+grid_h, grid_x:grid_x+grid_w] = z + height_z
     
-    def set_elevation(self, x: float, y: float, elevation: float):
-        """Set elevation at a point."""
+    def set_elevation(self, x: float, y: float, w: float, h: float, z: float):
+        """Set elevation for an area."""
         grid_x = int(x / self.cell_size)
         grid_y = int(y / self.cell_size)
+        grid_w = max(1, int(w / self.cell_size))
+        grid_h = max(1, int(h / self.cell_size))
         
-        if 0 <= grid_x < self.grid_width and 0 <= grid_y < self.grid_height:
-            self.elevation[grid_y, grid_x] = elevation
-    
+        # Ensure within bounds
+        grid_x = max(0, min(grid_x, self.grid_width - 1))
+        grid_y = max(0, min(grid_y, self.grid_height - 1))
+        grid_w = min(grid_w, self.grid_width - grid_x)
+        grid_h = min(grid_h, self.grid_height - grid_y)
+        
+        self.elevation[grid_y:grid_y+grid_h, grid_x:grid_x+grid_w] = z
+
+    def set_stairs_elevation(self, x: float, y: float, w: float, h: float, start_z: float, end_z: float, direction: str):
+        """Set elevation gradient for stairs."""
+        grid_x = int(x / self.cell_size)
+        grid_y = int(y / self.cell_size)
+        grid_w = max(1, int(w / self.cell_size))
+        grid_h = max(1, int(h / self.cell_size))
+        
+        # Ensure within bounds
+        grid_x = max(0, min(grid_x, self.grid_width - 1))
+        grid_y = max(0, min(grid_y, self.grid_height - 1))
+        grid_w = min(grid_w, self.grid_width - grid_x)
+        grid_h = min(grid_h, self.grid_height - grid_y)
+        
+        # Create elevation gradient
+        for dy in range(grid_h):
+            for dx in range(grid_w):
+                if direction == "north":
+                    progress = float(dy) / (grid_h - 1) if grid_h > 1 else 1.0
+                elif direction == "south":
+                    progress = 1.0 - (float(dy) / (grid_h - 1)) if grid_h > 1 else 0.0
+                elif direction == "east":
+                    progress = float(dx) / (grid_w - 1) if grid_w > 1 else 1.0
+                else:  # west
+                    progress = 1.0 - (float(dx) / (grid_w - 1)) if grid_w > 1 else 0.0
+                
+                elevation = start_z + (end_z - start_z) * progress
+                if 0 <= grid_y + dy < self.grid_height and 0 <= grid_x + dx < self.grid_width:
+                    self.elevation[grid_y + dy, grid_x + dx] = elevation
+                    self.walkable[grid_y + dy, grid_x + dx] = True
+
     def add_area(self, name: str, area_data: Dict):
         """Add an area to the navigation mesh."""
         self.areas[name] = area_data
         
-        # Update elevation if area has elevation
-        if "elevation" in area_data:
-            x = int(area_data["x"] / self.cell_size)
-            y = int(area_data["y"] / self.cell_size)
-            w = int(area_data["w"] / self.cell_size)
-            h = int(area_data["h"] / self.cell_size)
-            
-            # Ensure within bounds
-            x = max(0, min(x, self.grid_width - 1))
-            y = max(0, min(y, self.grid_height - 1))
-            w = min(w, self.grid_width - x)
-            h = min(h, self.grid_height - y)
-            
-            self.elevation[y:y+h, x:x+w] = area_data["elevation"]
+        # Set area elevation
+        x = area_data["x"]
+        y = area_data["y"]
+        w = area_data["w"]
+        h = area_data["h"]
+        z = area_data.get("z", 0)  # Use z instead of elevation
+        
+        self.set_elevation(x, y, w, h, z)
     
     def is_walkable(self, x: float, y: float) -> bool:
         """Check if a position is walkable."""
@@ -95,11 +128,11 @@ class NavigationMesh:
         grid_y = int(y / self.cell_size)
         
         if 0 <= grid_x < self.grid_width and 0 <= grid_y < self.grid_height:
-            return self.elevation[grid_y, grid_x]
+            return float(self.elevation[grid_y, grid_x])
         return 0.0
     
     def get_neighbors(self, node: Node) -> List[Tuple[float, float, float]]:
-        """Get walkable neighboring positions."""
+        """Get valid neighboring positions."""
         x, y, z = node.position
         neighbors = []
         
@@ -107,29 +140,33 @@ class NavigationMesh:
         grid_x = int(x / self.cell_size)
         grid_y = int(y / self.cell_size)
         
-        # Check 8 surrounding cells
+        # Check all 8 directions
         for dx, dy in [(0,1), (1,0), (0,-1), (-1,0), (1,1), (-1,1), (1,-1), (-1,-1)]:
             new_grid_x = grid_x + dx
             new_grid_y = grid_y + dy
             
-            # Skip if out of bounds
-            if (new_grid_x < 0 or new_grid_x >= self.grid_width or
-                new_grid_y < 0 or new_grid_y >= self.grid_height):
+            # Check bounds
+            if not (0 <= new_grid_x < self.grid_width and 0 <= new_grid_y < self.grid_height):
                 continue
-            
-            # Skip if not walkable
+                
+            # Check if walkable
             if not self.walkable[new_grid_y, new_grid_x]:
                 continue
             
-            # Convert back to world coordinates (center of cell)
-            new_x = (new_grid_x + 0.5) * self.cell_size
-            new_y = (new_grid_y + 0.5) * self.cell_size
-            new_z = self.elevation[new_grid_y, new_grid_x]
+            # Get world coordinates
+            new_x = new_grid_x * self.cell_size
+            new_y = new_grid_y * self.cell_size
+            new_z = self.get_elevation(new_x, new_y)
             
-            # Check if elevation change is traversable
-            if abs(new_z - z) <= 1.5:  # Max climbable height
-                neighbors.append((new_x, new_y, new_z))
-        
+            # Check elevation difference
+            if abs(new_z - z) > 1.5:  # Max climbable height
+                continue
+                
+            # Check for collisions along the path
+            if self.collision_detector.check_collision((x,y,z), (new_x, new_y, new_z)):
+                continue
+                
+            neighbors.append((new_x, new_y, new_z))
         return neighbors
 
 class PathFinder:
@@ -137,9 +174,22 @@ class PathFinder:
     def __init__(self, nav_mesh: NavigationMesh):
         self.nav_mesh = nav_mesh
     
+    def _distance_to(self, pos1: Tuple[float, float, float], 
+                    pos2: Tuple[float, float, float]) -> float:
+        """Calculate 3D distance between positions with extra weight for elevation difference."""
+        dx = pos2[0] - pos1[0]
+        dy = pos2[1] - pos1[1]
+        dz = pos2[2] - pos1[2]
+        # Give more weight to elevation difference to encourage exploring different heights
+        return math.sqrt(dx*dx + dy*dy + 3.0*dz*dz)
+    
     def find_path(self, start: Tuple[float, float, float], 
                   goal: Tuple[float, float, float]) -> List[Tuple[float, float, float]]:
         """Find a path from start to goal."""
+        print(f"\nPathfinding debug:")
+        print(f"Start: {start}")
+        print(f"Goal: {goal}")
+        
         # Convert to grid coordinates
         start_x = int(start[0] / self.nav_mesh.cell_size)
         start_y = int(start[1] / self.nav_mesh.cell_size)
@@ -147,15 +197,22 @@ class PathFinder:
         goal_y = int(goal[1] / self.nav_mesh.cell_size)
         
         # Check if start or goal is out of bounds or not walkable
-        if (not (0 <= start_x < self.nav_mesh.grid_width and 0 <= start_y < self.nav_mesh.grid_height) or
-            not (0 <= goal_x < self.nav_mesh.grid_width and 0 <= goal_y < self.nav_mesh.grid_height) or
-            not self.nav_mesh.walkable[start_y, start_x] or
-            not self.nav_mesh.walkable[goal_y, goal_x]):
+        if not (0 <= start_x < self.nav_mesh.grid_width and 0 <= start_y < self.nav_mesh.grid_height):
+            print("Start position out of bounds")
+            return []
+        if not (0 <= goal_x < self.nav_mesh.grid_width and 0 <= goal_y < self.nav_mesh.grid_height):
+            print("Goal position out of bounds")
+            return []
+        if not self.nav_mesh.walkable[start_y, start_x]:
+            print("Start position not walkable")
+            return []
+        if not self.nav_mesh.walkable[goal_y, goal_x]:
+            print("Goal position not walkable")
             return []
         
         # Create start and goal nodes
-        start_node = Node((start_x * self.nav_mesh.cell_size, start_y * self.nav_mesh.cell_size, start[2]))
-        goal_node = Node((goal_x * self.nav_mesh.cell_size, goal_y * self.nav_mesh.cell_size, goal[2]))
+        start_node = Node(start, g_cost=0, h_cost=self._distance_to(start, goal))
+        goal_pos = goal
         
         # Initialize open and closed sets
         open_set = []
@@ -166,23 +223,38 @@ class PathFinder:
         heapq.heappush(open_set, start_node)
         open_dict[start_node.position] = start_node
         
-        while open_set:
+        iterations = 0
+        max_iterations = 1000
+        
+        while open_set and iterations < max_iterations:
+            iterations += 1
+            
             # Get node with lowest f_cost
             current = heapq.heappop(open_set)
             open_dict.pop(current.position)
+            
+            # Check if reached goal - more lenient distance check
+            dist_to_goal = self._distance_to(current.position, goal)
+            if dist_to_goal < self.nav_mesh.cell_size * 1.5:
+                print(f"Found path after {iterations} iterations")
+                path = self._reconstruct_path(current)
+                if path:
+                    if dist_to_goal > 0.1:
+                        path.append(goal)
+                    print(f"Path found: {path}")
+                    return path
+                print("Failed to reconstruct path")
+                return []
+            
+            # Get and check neighbors
+            neighbors = self._get_neighbors(current, goal)
+            print(f"Iteration {iterations}: Current={current.position}, Found {len(neighbors)} neighbors")
+            
+            # Add current to closed set AFTER getting neighbors
+            # This allows revisiting nodes if we find a better path
             closed_set.add(current.position)
             
-            # Check if reached goal
-            if self._distance_to(current.position, goal) < self.nav_mesh.cell_size * 1.5:
-                path = self._reconstruct_path(current)
-                # Convert back to world coordinates and ensure goal is reached
-                path = [(x, y, z) for x, y, z in path]
-                if path:
-                    path[-1] = goal  # Force last point to be exactly the goal
-                return path
-            
-            # Check neighbors
-            for neighbor_pos in self.nav_mesh.get_neighbors(current):
+            for neighbor_pos in neighbors:
                 if neighbor_pos in closed_set:
                     continue
                 
@@ -207,17 +279,11 @@ class PathFinder:
                     heapq.heappush(open_set, neighbor)
                     open_dict[neighbor_pos] = neighbor
         
-        # No path found
+        if iterations >= max_iterations:
+            print("Reached maximum iterations")
+        else:
+            print("No more nodes to explore")
         return []
-    
-    def _distance_to(self, pos1: Tuple[float, float, float], 
-                    pos2: Tuple[float, float, float]) -> float:
-        """Calculate 3D distance between positions."""
-        return math.sqrt(
-            (pos2[0] - pos1[0])**2 + 
-            (pos2[1] - pos1[1])**2 + 
-            (pos2[2] - pos1[2])**2
-        )
     
     def _reconstruct_path(self, end_node: Node) -> List[Tuple[float, float, float]]:
         """Reconstruct path from end node to start."""
@@ -230,169 +296,152 @@ class PathFinder:
         
         return list(reversed(path))
 
+    def _get_neighbors(self, node: Node, goal: Tuple[float, float, float]) -> List[Tuple[float, float, float]]:
+        """Get valid neighboring positions with improved obstacle avoidance."""
+        x, y, z = node.position
+        neighbors = []
+        
+        # Calculate grid coordinates for current position
+        curr_grid_x = int(x / self.nav_mesh.cell_size)
+        curr_grid_y = int(y / self.nav_mesh.cell_size)
+        
+        # Check if current position is on stairs
+        curr_elev = self.nav_mesh.elevation[curr_grid_y, curr_grid_x]
+        on_stairs = curr_elev > 0.01
+        print(f"\nChecking neighbors for position ({x:.1f}, {y:.1f}, {z:.1f})")
+        print(f"Current elevation: {curr_elev:.2f}, on_stairs: {on_stairs}")
+        
+        # Determine step sizes based on context
+        if on_stairs:
+            # Smaller steps on stairs for finer control
+            step_sizes = [0.25]  # Single small step size for more precise control
+        else:
+            step_sizes = [1.0]  # Normal step size
+        
+        # Check all 8 directions
+        directions = [
+            (0, 1), (1, 0), (0, -1), (-1, 0),  # Cardinal directions
+            (1, 1), (-1, 1), (1, -1), (-1, -1)  # Diagonals
+        ]
+        
+        # Get goal elevation for smarter pathfinding
+        goal_x = int(goal[0] / self.nav_mesh.cell_size)
+        goal_y = int(goal[1] / self.nav_mesh.cell_size)
+        goal_elev = self.nav_mesh.elevation[goal_y, goal_x]
+        
+        for step_size in step_sizes:
+            for dx, dy in directions:
+                new_x = x + dx * self.nav_mesh.cell_size * step_size
+                new_y = y + dy * self.nav_mesh.cell_size * step_size
+                
+                # Skip if out of bounds
+                if not (0 <= new_x < self.nav_mesh.width and 0 <= new_y < self.nav_mesh.height):
+                    continue
+                
+                # Get elevation at new position
+                new_grid_x = int(new_x / self.nav_mesh.cell_size)
+                new_grid_y = int(new_y / self.nav_mesh.cell_size)
+                new_elev = self.nav_mesh.elevation[new_grid_y, new_grid_x]
+                
+                # Skip if not walkable
+                if not self.nav_mesh.is_walkable(new_x, new_y):
+                    print(f"Position ({new_x:.1f}, {new_y:.1f}) not walkable")
+                    continue
+                
+                # Use grid elevation for z-coordinate when on stairs
+                if on_stairs:
+                    new_z = new_elev
+                else:
+                    new_z = self.nav_mesh.get_elevation(new_x, new_y)
+                
+                # Check elevation difference
+                elev_diff = abs(new_z - z)
+                
+                # More lenient elevation checks on stairs
+                if on_stairs:
+                    # Allow larger steps when moving towards goal elevation
+                    if goal_elev > z and new_z > z:  # Going up
+                        max_step = 0.5
+                    elif goal_elev < z and new_z < z:  # Going down
+                        max_step = 0.5
+                    else:
+                        max_step = 0.3
+                else:
+                    max_step = 0.3
+                
+                if elev_diff > max_step:
+                    print(f"Elevation difference too large: {elev_diff:.2f} > {max_step:.2f} at ({new_x:.1f}, {new_y:.1f}, {new_z:.1f})")
+                    continue
+                
+                # Check for collisions
+                if self.nav_mesh.collision_detector and self.nav_mesh.collision_detector.check_collision(
+                    node.position, (new_x, new_y, new_z)
+                ):
+                    print(f"Collision detected at ({new_x:.1f}, {new_y:.1f}, {new_z:.1f})")
+                    continue
+                
+                # Add valid neighbor
+                neighbors.append((new_x, new_y, new_z))
+                print(f"Added neighbor: ({new_x:.1f}, {new_y:.1f}, {new_z:.1f})")
+        
+        return neighbors
+
 class CollisionDetector:
     """Handles collision detection between objects."""
     def __init__(self, nav_mesh: NavigationMesh):
         self.nav_mesh = nav_mesh
     
-    def check_collision(self, position: Tuple[float, float, float], 
-                       radius: float, height: float) -> bool:
-        """Check if an object collides with any obstacles."""
-        x, y, z = position
+    def check_collision(self, start: Tuple[float, float, float], 
+                       end: Tuple[float, float, float]) -> bool:
+        """Check if there is a collision between start and end points."""
+        x1, y1, z1 = start
+        x2, y2, z2 = end
         
-        # Convert to grid coordinates
-        grid_x = int(x / self.nav_mesh.cell_size)
-        grid_y = int(y / self.nav_mesh.cell_size)
+        # Get direction vector
+        dx = x2 - x1
+        dy = y2 - y1
+        dz = z2 - z1
+        distance = math.sqrt(dx*dx + dy*dy + dz*dz)
         
-        # Calculate grid cells to check based on radius
-        radius_cells = max(1, int((radius * 2) / self.nav_mesh.cell_size))
-        
-        # Check surrounding cells
-        for dy in range(-radius_cells, radius_cells + 1):
-            for dx in range(-radius_cells, radius_cells + 1):
-                check_x = grid_x + dx
-                check_y = grid_y + dy
-                
-                # Skip if out of bounds
-                if (check_x < 0 or check_x >= self.nav_mesh.grid_width or
-                    check_y < 0 or check_y >= self.nav_mesh.grid_height):
-                    continue
-                
-                # Check if cell is non-walkable
-                if not self.nav_mesh.walkable[check_y, check_x]:
-                    # Check cell center
-                    cell_center_x = (check_x + 0.5) * self.nav_mesh.cell_size
-                    cell_center_y = (check_y + 0.5) * self.nav_mesh.cell_size
-                    dx = cell_center_x - x
-                    dy = cell_center_y - y
-                    dist = math.sqrt(dx*dx + dy*dy)
-                    
-                    # Check elevation
-                    cell_z = self.nav_mesh.elevation[check_y, check_x]
-                    if dist <= radius and abs(cell_z - z) < height:
-                        return True
-                    
-                    # Check corners
-                    corners = [
-                        (check_x * self.nav_mesh.cell_size, check_y * self.nav_mesh.cell_size),
-                        ((check_x + 1) * self.nav_mesh.cell_size, check_y * self.nav_mesh.cell_size),
-                        (check_x * self.nav_mesh.cell_size, (check_y + 1) * self.nav_mesh.cell_size),
-                        ((check_x + 1) * self.nav_mesh.cell_size, (check_y + 1) * self.nav_mesh.cell_size)
-                    ]
-                    
-                    for corner_x, corner_y in corners:
-                        dx = corner_x - x
-                        dy = corner_y - y
-                        dist = math.sqrt(dx*dx + dy*dy)
-                        if dist <= radius:
-                            return True
-                    
-                    # Check edges
-                    for i in range(len(corners)):
-                        x1, y1 = corners[i]
-                        x2, y2 = corners[(i + 1) % len(corners)]
-                        # Calculate closest point on line segment
-                        dx = x2 - x1
-                        dy = y2 - y1
-                        length_sq = dx*dx + dy*dy
-                        if length_sq > 0:
-                            t = max(0, min(1, ((x - x1) * dx + (y - y1) * dy) / length_sq))
-                            closest_x = x1 + t * dx
-                            closest_y = y1 + t * dy
-                            dx = closest_x - x
-                            dy = closest_y - y
-                            dist = math.sqrt(dx*dx + dy*dy)
-                            if dist <= radius:
-                                return True
-                    
-                    # Check if cell is elevated platform
-                    if cell_z > z and abs(cell_z - z) < height:
-                        # Check if close to platform edge
-                        edge_dist = min(
-                            abs(x - check_x * self.nav_mesh.cell_size),
-                            abs(x - (check_x + 1) * self.nav_mesh.cell_size),
-                            abs(y - check_y * self.nav_mesh.cell_size),
-                            abs(y - (check_y + 1) * self.nav_mesh.cell_size)
-                        )
-                        if edge_dist <= radius:
-                            return True
-        
-        return False
-    
-    def ray_cast(self, start: Tuple[float, float, float], 
-                 direction: Tuple[float, float, float], 
-                 max_distance: float) -> Optional[Tuple[float, float, float]]:
-        """Cast a ray and return the first hit point."""
+        if distance == 0:
+            return False
+            
         # Normalize direction
-        length = math.sqrt(direction[0]**2 + direction[1]**2 + direction[2]**2)
-        if length == 0:
-            return None
+        dx /= distance
+        dy /= distance
+        dz /= distance
         
-        dx = direction[0] / length
-        dy = direction[1] / length
-        dz = direction[2] / length
+        # Check points along the path
+        steps = int(distance / (self.nav_mesh.cell_size * 0.5))
+        steps = max(steps, 1)  # At least 1 step
         
-        # Current position
-        x, y, z = start
-        
-        # Step through grid cells
-        step_size = self.nav_mesh.cell_size * 0.5
-        distance = 0
-        
-        while distance < max_distance:
-            # Check current cell
+        for i in range(steps + 1):
+            t = i * distance / steps
+            x = x1 + dx * t
+            y = y1 + dy * t
+            z = z1 + dz * t
+            
+            # Convert to grid coordinates
             grid_x = int(x / self.nav_mesh.cell_size)
             grid_y = int(y / self.nav_mesh.cell_size)
             
-            if 0 <= grid_x < self.nav_mesh.grid_width and 0 <= grid_y < self.nav_mesh.grid_height:
-                if not self.nav_mesh.walkable[grid_y, grid_x]:
-                    return (x, y, z)
+            # Check bounds
+            if not (0 <= grid_x < self.nav_mesh.grid_width and 0 <= grid_y < self.nav_mesh.grid_height):
+                return True
                 
-                # Check elevation
-                cell_z = self.nav_mesh.elevation[grid_y, grid_x]
-                if z < cell_z or z > cell_z + 3.0:
-                    return (x, y, z)
+            # Check if walkable
+            if not self.nav_mesh.walkable[grid_y, grid_x]:
+                return True
+                
+            # Get ground elevation at this point
+            ground_z = self.nav_mesh.get_elevation(x, y)
             
-            # Step forward
-            x += dx * step_size
-            y += dy * step_size
-            z += dz * step_size
-            distance += step_size
-        
-        return None
-
-def create_navigation_mesh(map_data: Dict) -> NavigationMesh:
-    """Create a navigation mesh from map data."""
-    # Get map dimensions
-    width = map_data["metadata"]["map-size"][0]
-    height = map_data["metadata"]["map-size"][1]
-    
-    # Create navigation mesh
-    nav_mesh = NavigationMesh(width, height)
-    
-    # Add walls
-    for wall in map_data["walls"].values():
-        nav_mesh.add_obstacle(wall["x"], wall["y"], wall["w"], wall["h"])
-    
-    # Add objects
-    for obj in map_data["objects"].values():
-        nav_mesh.add_obstacle(obj["x"], obj["y"], obj["w"], obj["h"])
-    
-    # Add areas
-    for area in map_data["map-areas"].values():
-        nav_mesh.add_area(area["name"], area)
-        # Set elevation for area
-        if "elevation" in area:
-            x = int(area["x"] / nav_mesh.cell_size)
-            y = int(area["y"] / nav_mesh.cell_size)
-            w = int(area["w"] / nav_mesh.cell_size)
-            h = int(area["h"] / nav_mesh.cell_size)
-            nav_mesh.elevation[y:y+h, x:x+w] = area["elevation"]
-    
-    # Add elevation points
-    for point in map_data["elevation-points"]:
-        x = int(point["position"][0] / nav_mesh.cell_size)
-        y = int(point["position"][1] / nav_mesh.cell_size)
-        nav_mesh.elevation[y, x] = point["elevation"]
-    
-    return nav_mesh 
+            # Allow movement along stairs/ramps
+            if abs(z - ground_z) <= 2.0:  # More lenient for stairs/ramps
+                continue
+                
+            # Prevent moving too far above or below ground
+            if z < ground_z - 0.1 or z > ground_z + 3.0:
+                return True
+                
+        return False

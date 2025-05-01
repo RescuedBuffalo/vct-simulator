@@ -1,25 +1,35 @@
 import pytest
 import math
 from app.simulation.models.ability import (
-    AbilityType, AbilityDefinition, AbilityInstance,
-    STANDARD_ABILITIES
+    AbilityType, AbilityDefinition, AbilityTarget,
+    STANDARD_ABILITIES, MollyAbilityInstance
 )
-
+from app.simulation.models.map import Map
 class MockPlayer:
-    def __init__(self, id: str, location, view_direction):
-        self.id = id
-        self.location = location
-        self.view_direction = view_direction
+    """Mock player for testing abilities."""
+    def __init__(self, id_str: str):
+        self.id = id_str
+        self.location = (0, 0, 0)
+        self.view_direction = (1, 0, 0)
+        self.status_effects = {}  # Changed from list to dict
+        self.is_alive = True  # Add is_alive attribute
         self.health = 100
         self.armor = 50
         self.shield = True
         self.alive = True
-        self.status_effects = []
+        self.direction = 0  # Added direction attribute
 
-class MockMap:
-    def check_collision(self, start_pos, end_pos):
-        # Mock collision detection
-        return None
+    def apply_damage(self, dmg: int):
+        """Apply damage to player's health and armor."""
+        # Armor absorbs 66% of damage
+        if self.armor > 0:
+            armor_damage = min(self.armor, int(dmg * 0.5))
+            self.armor = max(0, self.armor - armor_damage)
+            dmg = max(0, dmg - armor_damage)
+        self.health = max(0, self.health - dmg)
+
+
+
 
 @pytest.fixture
 def mock_map():
@@ -28,10 +38,27 @@ def mock_map():
 @pytest.fixture
 def mock_players():
     return [
-        MockPlayer("player1", (0, 0, 0), (1, 0, 0)),  # Looking right
-        MockPlayer("player2", (10, 0, 0), (-1, 0, 0)),  # Looking left
-        MockPlayer("player3", (0, 10, 0), (0, -1, 0)),  # Looking down
+        MockPlayer("player1"),  # Looking right
+        MockPlayer("player2"),  # Looking left
+        MockPlayer("player3"),  # Looking down
     ]
+
+@pytest.fixture
+def mock_map():
+    """Create a simple square map for testing."""
+    test_map = Map("test_map", 32, 32)
+    test_map_json = {
+        "metadata" : {
+            "name" : "test_map",
+            "width" : 32,
+            "height" : 32
+        },
+        "map-areas" : {
+            "main" : {"x" : 0, "y" : 0, "w" : 32, "h" : 32, "z" : 0}
+        }
+    }
+    test_map.from_json(test_map_json)
+    return test_map
 
 def test_ability_definition_initialization():
     """Test ability definition initialization and defaults."""
@@ -56,36 +83,83 @@ def test_ability_instance_creation():
     assert not instance.effect_applied
     assert not instance.affected_players
 
-def test_flash_mechanics(mock_players):
+def test_flash_mechanics(mock_players, mock_map):
     """Test flash ability mechanics and player effects."""
     flash_def = STANDARD_ABILITIES["flash"]
     instance = flash_def.create_instance("player1")
     
-    # Activate flash in front of player2
-    instance.activate(
-        current_time=0.0,
-        origin=(5, 0, 0),  # Between player1 and player2
-        direction=(1, 0, 0)  # Moving right
-    )
+    # Set up player positions and view directions
+    # Player 1: Looking left (away from flash)
+    mock_players[0].location = (0, 0, 0)
+    mock_players[0].view_direction = (-1, 0, 0)  # Looking left (away from flash)
+    mock_players[0].direction = 180  # 180 degrees = facing left
     
-    assert instance.is_active
-    assert instance.charges_remaining == flash_def.max_charges - 1
+    # Player 2: Looking left (towards flash)
+    mock_players[1].location = (10, 0, 0)
+    mock_players[1].view_direction = (-1, 0, 0)  # Looking left (towards flash)
+    mock_players[1].direction = 180  # 180 degrees = facing left
     
-    # Update flash and check effects
-    instance.update(time_step=0.1, current_time=0.1, game_map=None, players=mock_players)
+    # Player 3: Looking perpendicular to flash
+    # Place player at (7, 10) and flash at (7, 0) so the vector to flash is straight down
+    # Then have player look right (1, 0, 0) which is perpendicular to the vector to flash
+    mock_players[2].location = (7, 10, 0)
+    mock_players[2].view_direction = (1, 0, 0)  # Looking right (perpendicular to flash)
+    mock_players[2].direction = 0  # 0 degrees = facing right
     
-    # Player2 should be flashed (looking at flash)
-    assert "player2" in instance.affected_players
-    assert "flashed" in mock_players[1].status_effects
+    # Place flash
+    instance.current_position3d = (7, 0, 0)  # Flash position
+    instance.is_active = True
+    
+    # Calculate dot products manually to verify our test setup
+    # Player 1 (looking away)
+    dx1 = 0 - 7  # Player x - flash x (direction from player to flash)
+    dy1 = 0 - 0  # Player y - flash y
+    length1 = math.sqrt(dx1*dx1 + dy1*dy1)
+    dx1, dy1 = dx1/length1, dy1/length1
+    dot1 = dx1 * mock_players[0].view_direction[0] + dy1 * mock_players[0].view_direction[1]
+    print(f"Player 1 dot product: {dot1}")  # Should be positive (looking away from flash)
+    
+    # Player 2 (looking towards)
+    dx2 = 10 - 7  # Player x - flash x
+    dy2 = 0 - 0   # Player y - flash y
+    length2 = math.sqrt(dx2*dx2 + dy2*dy2)
+    dx2, dy2 = dx2/length2, dy2/length2
+    dot2 = dx2 * mock_players[1].view_direction[0] + dy2 * mock_players[1].view_direction[1]
+    print(f"Player 2 dot product: {dot2}")  # Should be negative (looking towards flash)
+    
+    # Player 3 (looking perpendicular)
+    dx3 = 7 - 7   # Player x - flash x (0, since same x-coordinate)
+    dy3 = 10 - 0  # Player y - flash y (10, straight down to flash)
+    length3 = math.sqrt(dx3*dx3 + dy3*dy3)
+    dx3, dy3 = dx3/length3, dy3/length3  # This will be (0, 1) - straight down
+    # Dot product with (1, 0) view direction should be 0 (perpendicular)
+    dot3 = dx3 * mock_players[2].view_direction[0] + dy3 * mock_players[2].view_direction[1]
+    print(f"Player 3 dot product: {dot3}")  # Should be 0 (perpendicular)
+    
+    # Apply flash effect
+    instance.apply_effect(mock_map, mock_players)
+    
+    # Player2 should be flashed (looking towards flash)
+    assert mock_players[1].id in list(instance.affected_players), "Player 2 should be affected by flash"
+    assert "flashed" in mock_players[1].status_effects and mock_players[1].status_effects["flashed"] == flash_def.duration
     
     # Player1 should not be flashed (looking away)
-    assert "player1" not in instance.affected_players
+    assert mock_players[0].id not in list(instance.affected_players), "Player 1 should not be affected by flash"
     assert "flashed" not in mock_players[0].status_effects
+    
+    # Player3 should not be flashed (perpendicular)
+    assert mock_players[2].id not in list(instance.affected_players), "Player 3 should not be affected by flash"
+    assert "flashed" not in mock_players[2].status_effects
 
 def test_smoke_mechanics(mock_players):
     """Test smoke ability mechanics and area effects."""
     smoke_def = STANDARD_ABILITIES["smoke"]
     instance = smoke_def.create_instance("player1")
+    
+    # Set up player positions
+    mock_players[0].location = (3, 0, 0)  # Within radius
+    mock_players[1].location = (7, 0, 0)  # Within radius
+    mock_players[2].location = (20, 0, 0)  # Outside radius
     
     # Place smoke between players
     instance.activate(
@@ -94,41 +168,82 @@ def test_smoke_mechanics(mock_players):
         direction=(0, 0, 1)
     )
     
-    # Update smoke and check effects
-    instance.update(time_step=0.1, current_time=0.1, game_map=None, players=mock_players)
+    # Apply smoke effect directly
+    instance.apply_effect(None, mock_players)
     
     # Both players within radius should be affected
-    assert "player1" in instance.affected_players
-    assert "player2" in instance.affected_players
-    assert "smoked" in mock_players[0].status_effects
-    assert "smoked" in mock_players[1].status_effects
+    assert mock_players[0].id in instance.affected_players
+    assert mock_players[1].id in instance.affected_players
+    assert "smoked" in mock_players[0].status_effects and mock_players[0].status_effects["smoked"] == smoke_def.duration
+    assert "smoked" in mock_players[1].status_effects and mock_players[1].status_effects["smoked"] == smoke_def.duration
     
     # Player3 should not be affected (too far)
-    assert "player3" not in instance.affected_players
+    assert mock_players[2].id not in instance.affected_players
     assert "smoked" not in mock_players[2].status_effects
 
-def test_molly_damage_mechanics(mock_players):
-    """Test molly ability damage calculations."""
-    molly_def = STANDARD_ABILITIES["molly"]
-    instance = molly_def.create_instance("player1")
-    
-    # Place molly on player2
-    instance.activate(
-        current_time=0.0,
-        origin=(10, 0, 0),
-        direction=(0, 0, 1)
+def test_molly_mechanics():
+    """Test molly ability mechanics."""
+    # Create molly ability instance
+    molly_def = AbilityDefinition(
+        name="molly",
+        description="Test molly",
+        ability_type=AbilityType.MOLLY,
+        targeting_type=AbilityTarget.PROJECTILE,
+        duration=5.0,  # 5 second duration
+        effect_radius=3.0,  # 3 unit radius
+        damage=10.0,  # 10 damage per tick
     )
+    molly = MollyAbilityInstance(molly_def, "player1", "molly1", 1)
     
-    initial_health = mock_players[1].health
-    initial_armor = mock_players[1].armor
+    # Create test players
+    player1 = MockPlayer("player1")
+    player1.location = (0, 0, 0)
+    player1.health = 100
+    player1.armor = 50
     
-    # Update molly and check damage
-    instance.update(time_step=0.1, current_time=0.1, game_map=None, players=mock_players)
+    player2 = MockPlayer("player2")
+    player2.location = (2, 0, 0)  # Within radius
+    player2.health = 100
+    player2.armor = 0
     
-    # Verify damage application
-    assert mock_players[1].health < initial_health
-    assert mock_players[1].armor < initial_armor
-    assert "burning" in mock_players[1].status_effects
+    player3 = MockPlayer("player3")
+    player3.location = (5, 0, 0)  # Outside radius
+    player3.health = 100
+    player3.armor = 0
+    
+    players = [player1, player2, player3]
+    
+    # Activate molly at origin
+    molly.activate(0.0, (0, 0, 0), (1, 0, 0))
+    assert molly.is_active
+    
+    # Apply effect and check damage
+    molly.apply_effect(None, players)
+    
+    # Player 1 (with armor) should take reduced damage
+    assert player1.health == 95  # 5 damage to health (10 total - 5 to armor)
+    assert player1.armor == 45  # 5 damage to armor
+    assert "burning" in player1.status_effects and player1.status_effects["burning"] == molly_def.duration
+    assert "player1" in molly.affected_players
+    
+    # Player 2 (no armor) should take full damage
+    assert player2.health == 90  # Full 10 damage
+    assert player2.armor == 0
+    assert "burning" in player2.status_effects and player2.status_effects["burning"] == molly_def.duration
+    assert "player2" in molly.affected_players
+    
+    # Player 3 should be unaffected
+    assert player3.health == 100
+    assert player3.armor == 0
+    assert "burning" not in player3.status_effects
+    assert "player3" not in molly.affected_players
+    
+    # Update molly and check effects are removed when inactive
+    molly.is_active = False
+    molly.update(0.1, 5.1, None, players)  # After duration
+    
+    assert "burning" not in player1.status_effects
+    assert "burning" not in player2.status_effects
 
 def test_ability_duration_and_expiration():
     """Test ability duration tracking and expiration."""

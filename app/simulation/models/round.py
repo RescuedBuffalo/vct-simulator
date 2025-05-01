@@ -9,7 +9,8 @@ import time as time_module
 from app.simulation.models.player import Player
 from app.simulation.models.blackboard import Blackboard
 from app.simulation.models.ability import AbilityInstance
-
+from app.simulation.models.map_pathfinding import PathFinder, CollisionDetector
+from app.simulation.models.weapon import Weapon, WeaponFactory
 # Import Map for typing but avoid circular imports
 if TYPE_CHECKING:
     from app.simulation.models.map import Map
@@ -63,7 +64,7 @@ class DeathEvent:
 @dataclass
 class DroppedWeapon:
     """Track weapons dropped on the map."""
-    weapon_type: str
+    weapon: Weapon
     ammo: int
     position: Tuple[float, float]
     dropped_time: float
@@ -149,7 +150,7 @@ class Round:
         seed: Optional[int] = None,
         loss_bonus_attackers: int = 1900,
         loss_bonus_defenders: int = 1900,
-        map_obj: Optional['Map'] = None,
+        map_obj: Map = None,
     ):
         """
         Initialize a new round simulation.
@@ -172,71 +173,8 @@ class Round:
         self.attacker_ids = attacker_ids
         self.defender_ids = defender_ids
         self.map_data = map_data  # Store map_data for backward compatibility
-        
-        # Handle map data - support both Map object and legacy map_data dictionary
-        if map_obj is not None:
-            self.map = map_obj
-        else:
-            # For backwards compatibility: use map_data and create a Map object
-            try:
-                from app.simulation.models.map import Map
-                if map_data:
-                    map_size = map_data.get("metadata", {}).get("map-size", [32, 32])
-                    self.map = Map(map_data.get("metadata", {}).get("name", "Unknown"), 
-                                  map_size[0], map_size[1])
-                    
-                    # Load map areas, walls, etc. from map_data into the Map object
-                    for name, area_data in map_data.get("map-areas", {}).items():
-                        self.map.areas[name] = {
-                            "x": area_data["x"],
-                            "y": area_data["y"],
-                            "w": area_data["w"],
-                            "h": area_data["h"],
-                            "z": area_data.get("z", 0)
-                        }
-                    
-                    for name, wall_data in map_data.get("walls", {}).items():
-                        self.map.walls[name] = {
-                            "x": wall_data["x"],
-                            "y": wall_data["y"],
-                            "w": wall_data["w"],
-                            "h": wall_data["h"],
-                            "z": wall_data.get("z", 0)
-                        }
-                    
-                    # Add objects and other collision elements
-                    for name, obj_data in map_data.get("objects", {}).items():
-                        if name != "instructions":
-                            self.map.objects[name] = {
-                                "x": obj_data["x"],
-                                "y": obj_data["y"],
-                                "w": obj_data["w"],
-                                "h": obj_data["h"],
-                                "z": obj_data.get("z", 0)
-                            }
-                    
-                    # Copy bomb sites
-                    for name, site_data in map_data.get("bomb-sites", {}).items():
-                        self.map.bomb_sites[name] = {
-                            "x": site_data["x"],
-                            "y": site_data["y"],
-                            "w": site_data["w"],
-                            "h": site_data["h"],
-                            "z": site_data.get("z", 0)
-                        }
-                        
-                    # Copy spawn points
-                    self.map.attacker_spawns = map_data.get("attacker_spawns", [])
-                    self.map.defender_spawns = map_data.get("defender_spawns", [])
-                else:
-                    # Create a default map if none provided
-                    self.map = Map("Default", 32, 32)
-            except (ImportError, Exception) as e:
-                # Map object creation failed, create empty map
-                from app.simulation.models.map import Map
-                self.map = Map("Default", 32, 32)
-                print(f"Warning: Map object creation failed: {str(e)}")
-        
+        self.map = map_obj
+
         # Initialize or use provided blackboards for each team
         self.attacker_blackboard = attacker_blackboard if attacker_blackboard else Blackboard("attackers")
         self.defender_blackboard = defender_blackboard if defender_blackboard else Blackboard("defenders")
@@ -448,23 +386,26 @@ class Round:
         # Update economy info in blackboard
         economy = team_blackboard.get("economy")
         economy.team_credits += player.creds
+
+        # Get weapon catalog
+        weapon_catalog = WeaponFactory.create_weapon_catalog()
         
         # Basic buy logic - can be expanded based on economy and team strategy
         if player.creds >= 3900:  # Full buy threshold
             # Buy rifle, heavy shield, and abilities
-            player.weapon = "Vandal" if random.random() < 0.5 else "Phantom"
+            player.weapon = weapon_catalog["Vandal"] if random.random() < 0.5 else weapon_catalog["Phantom"]
             player.shield = "heavy"
             player.creds -= 3900
             economy.can_full_buy = True
         elif player.creds >= 2400:  # Light buy threshold
             # Buy SMG or shotgun and light shield
-            player.weapon = "Spectre" if random.random() < 0.7 else "Bulldog"
+            player.weapon = weapon_catalog["Spectre"] if random.random() < 0.7 else weapon_catalog["Bulldog"]
             player.shield = "light"
             player.creds -= 2400
             economy.can_half_buy = True
         elif player.creds >= 950:  # Eco round
             # Buy pistol and maybe light shield
-            player.weapon = "Sheriff" if random.random() < 0.6 else "Ghost"
+            player.weapon = weapon_catalog["Sheriff"] if random.random() < 0.6 else weapon_catalog["Ghost"]
             if player.creds >= 1400:
                 player.shield = "light"
                 player.creds -= 450
@@ -472,29 +413,17 @@ class Round:
         else:
             # Very low economy - consider saving
             economy.saving = True
-        
+
         # Update average credits after purchases
         alive_player_count = len(team_blackboard.get("alive_players"))
         if alive_player_count > 0:
             all_creds = [self.players[pid].creds for pid in team_blackboard.get("alive_players")]
             economy.avg_credits = sum(all_creds) / alive_player_count
-        
+
         # Track purchase events for statistics
         if player.weapon:
-            item_cost = {
-                "light_shield": 400,
-                "heavy_shield": 1000,
-                "Spectre": 1600,
-                "Bulldog": 2050,
-                "Phantom": 2900,
-                "Vandal": 2900,
-                "Operator": 4700,
-                "Sheriff": 800,
-                "Marshal": 950,
-                "Odin": 3200
-            }.get(player.weapon, 500)  # Default cost for unknown items
-            
-            item_type = "shield" if player.shield == "heavy" or player.shield == "light" else f"weapon_{player.weapon}"
+            item_cost = player.weapon.cost
+            item_type = "shield" if player.shield == "heavy" or player.shield == "light" else f"weapon_{player.weapon.name}"
             self._log_purchase_event(player.id, item_type, item_cost)
     
     def _process_round_phase(self, time_step: float) -> None:
@@ -912,28 +841,25 @@ class Round:
         """Simulate combat encounters between players with line of sight."""
         # Check each player for potential combat
         for player_id, player in self.players.items():
-            if not player.alive or not player.visible_enemies:
+            if not player.alive or not player.visible_enemies and player.weapon is None:
                 continue
                 
-            # Determine which enemies to engage
             for enemy_id in player.visible_enemies:
                 enemy = self.players[enemy_id]
                 if not enemy.alive:
                     continue
                     
-                # Simulate combat outcome
-                if not player.weapon == None:
+                # Use collision detector to check line of sight
+                if not self.map.collision_detector.check_collision(
+                    player.location,
+                    enemy.location
+                ):
                     self._simulate_duel(player_id, enemy_id)
     
     def _simulate_duel(self, player1_id: str, player2_id: str, accuracy_modifier: float = 1.0) -> None:
         """Simulate a duel between two players with enhanced mechanics."""
         player1 = self.players[player1_id]
         player2 = self.players[player2_id]
-        
-        # Get weapon stats
-        weapon = None
-        if hasattr(self, 'weapon_catalog'):
-            weapon = self.weapon_catalog.get(player1.weapon)
         
         # Calculate combat advantage
         advantage = self._calculate_combat_advantage(player1_id, player2_id)
@@ -942,19 +868,19 @@ class Round:
         advantage *= accuracy_modifier
         
         # Apply weapon stats if available
-        if weapon:
+        if player1.weapon is not None:
             # Range-based damage
             distance = self._calculate_distance(player1.location, player2.location)
             range_type = "close" if distance < 10 else "medium" if distance < 25 else "long"
-            damage_multiplier = weapon.range_multipliers.get(range_type, 1.0)
+            damage_multiplier = player1.weapon.range_multipliers.get(range_type, 1.0)
             
             # Calculate damage
-            base_damage = weapon.damage * damage_multiplier
+            base_damage = player1.weapon.damage * damage_multiplier
             
             # Armor penetration
             if player2.shield:
-                armor_damage = base_damage * (1 - weapon.armor_penetration)
-                health_damage = base_damage * weapon.armor_penetration
+                armor_damage = base_damage * (1 - player1.weapon.armor_penetration)
+                health_damage = base_damage * player1.weapon.armor_penetration
             else:
                 armor_damage = 0
                 health_damage = base_damage
@@ -970,10 +896,10 @@ class Round:
             # Check for kill
             if player2.health <= 0:
                 self._handle_player_death(player2_id, player1_id, weapon=player1.weapon)
-        else:
-            # Fallback to simple combat if no weapon system
-            if random.random() < advantage:
-                self._handle_player_death(player2_id, player1_id, weapon=player1.weapon)
+        # else:
+        #     # Fallback to simple combat if no weapon system
+        #     if random.random() < advantage:
+        #         self._handle_player_death(player2_id, player1_id, weapon=player1.weapon)
 
     def _calculate_combat_advantage(self, player_id: str, opponent_id: str) -> float:
         """Calculate combat advantage with enhanced mechanics."""
@@ -988,9 +914,9 @@ class Round:
             advantage *= player.movement_accuracy / 100.0
         
         # Status effects
-        if "flashed" in player.status_effects:
+        if "flashed" in list(player.status_effects.keys()):
             advantage *= 0.2
-        if "slowed" in player.status_effects:
+        if "slowed" in list(player.status_effects.keys()):
             advantage *= 0.8
         
         # First shot advantage
@@ -1043,11 +969,11 @@ class Round:
         # Check team elimination
         self._check_team_elimination()
     
-    def _drop_weapon(self, player_id: str, weapon: str, location: Tuple[float, float]) -> None:
+    def _drop_weapon(self, player_id: str, weapon: Weapon, location: Tuple[float, float]) -> None:
         """Create a dropped weapon on the map."""
         # Create dropped weapon
         dropped = DroppedWeapon(
-            weapon_type=weapon,
+            weapon=weapon,
             ammo=random.randint(5, 25),  # Random ammo amount
             position=location,
             dropped_time=self.tick
@@ -1089,6 +1015,47 @@ class Round:
             self.round_winner = RoundWinner.ATTACKERS
             self.round_end_condition = RoundEndCondition.ELIMINATION
             self.phase = RoundPhase.END
+
+    def _simulate_player_movements(self, time_step: float) -> None:
+        """Simulate all player movements based on current inputs and game state."""
+        # For each player, calculate movement direction based on their goals
+        # and use the new physics-based movement system
+        
+        # Create a Map object from map_data for collision detection
+        for player_id, player in self.players.items():
+            if not player.alive:
+                continue
+                
+            if player.is_planting or player.is_defusing:
+                player.set_movement_input((0, 0))
+                continue
+            
+            # Get current and target positions
+            current_pos = player.location
+            target_pos = self._get_player_target_position(player_id)
+            
+            if target_pos:
+                # Find path using A* pathfinding
+                path = self.map.pathfinder.find_path(
+                    start=current_pos,
+                    goal=target_pos
+                )
+                
+                if path:
+                    # Get next waypoint
+                    next_pos = path[1] if len(path) > 1 else path[0]
+                    
+                    # Calculate movement direction to next waypoint
+                    direction = self._direction_to_target(current_pos, next_pos)
+                    
+                    # Check for collisions before moving
+                    if not self.map.collision_detector.check_collision(
+                        current_pos, next_pos
+                    ):
+                        player.set_movement_input(direction)
+                    else:
+                        # Find alternative path or wait
+                        player.set_movement_input((0, 0))
     
     def _simulate_player_movements(self, time_step: float) -> None:
         """Simulate all player movements based on current inputs and game state."""
@@ -1170,7 +1137,7 @@ class Round:
                 if player.weapon:
                     self._drop_weapon(player.id, player.weapon, (px, py))
                 # Pick up the dropped weapon
-                player.weapon = dropped.weapon_type
+                player.weapon = dropped.weapon
                 weapon_to_remove = dropped
                 break
         if weapon_to_remove:
@@ -1461,29 +1428,26 @@ class Round:
         # Movement is now handled by the physics-based movement system
         # in _simulate_player_movements
         
-        # Process other status updates
-        # Decay status effects over time
-        new_status_effects = []
-        for effect in player.status_effects:
-            # In a real implementation, we would track effect durations
-            # For now, each effect has a chance to wear off each update
-            if effect == "flashed":
-                # Flash effects are short-lived
-                if random.random() < 0.3:  # 30% chance to recover per update
-                    pass  # Don't add back to list
-                else:
-                    new_status_effects.append(effect)
-            elif effect == "slowed":
-                # Slow effects last a bit longer
-                if random.random() < 0.2:  # 20% chance to recover per update
-                    pass
-                else:
-                    new_status_effects.append(effect)
+        # Process status effects
+        # Decay effect durations over time and remove expired effects
+        effects_to_remove = []
+        for effect, duration in player.status_effects.items():
+            # Reduce duration by time step
+            new_duration = duration - time_step
+            if new_duration <= 0:
+                # Effect has expired
+                effects_to_remove.append(effect)
             else:
-                # Other effects persist
-                new_status_effects.append(effect)
+                # Update remaining duration
+                player.status_effects[effect] = new_duration
                 
-        player.status_effects = new_status_effects
+        # Remove expired effects
+        for effect in effects_to_remove:
+            del player.status_effects[effect]
+            
+        # Note: Continuous effects like molly damage are handled by their respective
+        # ability instances in their update methods, which will maintain the effect
+        # duration as long as the player remains in the area of effect
 
     def _check_round_end_conditions(self) -> None:
         """Check for round end conditions."""
@@ -1713,7 +1677,13 @@ class Round:
         if not player.alive or ability_name not in player.abilities:
             return
             
-        ability = player.abilities[ability_name]
+        # Check if ability has clear path to target
+        if not self.map.collision_detector.check_collision(
+            player.location,
+            target_location
+        ):
+            ability = player.abilities[ability_name]
+            
         if not ability.is_available():
             return
             

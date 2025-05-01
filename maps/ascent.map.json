@@ -6,7 +6,6 @@
         "description" : "A map for Valorant",
         "map-size" : [32,32],
         "bomb-sites" : ["A","B"]
-
     },
 "map-areas" : {
     "t-spawn" : {"x" : 1, "y" : 16, "w" : 6, "h" : 5, "z" : 1},
@@ -53,7 +52,7 @@
     },
     "stairs" : {
         "a-heaven-stairs" : {"x" : 5, "y" : 23, "w" : 1, "h" : 2, 
-        "z" : 1, "height_z" : 1, "direction" : "north"}
+        "z" : 1, "height_z" : 1, "direction" : "north", "steps" : 4}
     },
     "ramps" : {
 

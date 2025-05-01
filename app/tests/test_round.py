@@ -4,6 +4,9 @@ from app.simulation.models.player import Player
 from app.simulation.models.team import Team
 from app.simulation.models.blackboard import Blackboard
 from app.simulation.models.map import Map, MapBoundary
+from app.simulation.models.map_pathfinding import CollisionDetector
+from app.simulation.models.round import DroppedWeapon
+from app.simulation.models.weapon import WeaponFactory
 import math
 
 class DummyAbility:
@@ -26,6 +29,80 @@ def mock_players():
     defenders = [DummyPlayer(f"d{i}", "defenders") for i in range(5)]
     players = {p.id: p for p in attackers + defenders}
     return players, [p.id for p in attackers], [p.id for p in defenders]
+
+@pytest.fixture
+def mock_map():
+    test_map = Map("test_map", 100, 100)
+    test_map_json = {
+        "metadata": {
+            "name": "test_map",
+            "map-size": [100, 100]
+        },
+        "map-areas": {
+            "ground": {
+                "x": 0,
+                "y": 0,
+                "w": 100,
+                "h": 100,
+                "z": 0,
+                "elevation": 0
+            },
+            "platform1": {
+                "x": 20,
+                "y": 20,
+                "w": 10,
+                "h": 10,
+                "z": 2.0,
+                "elevation": 2.0
+            }
+        },
+        "walls": {
+            "wall1": {
+                "x": 40,
+                "y": 40,
+                "w": 20,
+                "h": 2,
+                "z": 0,
+                "height_z": 3.0
+            },
+            "wall2": {
+                "x": 40,
+                "y": 40,
+                "w": 2,
+                "h": 20,
+                "z": 0,
+                "height_z": 3.0
+            }
+        },
+        "objects": {
+            "box1": {
+                "x": 60,
+                "y": 60,
+                "w": 5,
+                "h": 5,
+                "z": 0,
+                "height_z": 1.0
+            }
+        },
+        "stairs": {
+            "test_stairs": {
+                "x": 30,
+                "y": 30,
+                "w": 2,
+                "h": 5,
+                "z": 0,
+                "height_z": 1.5,
+                "direction": "north",
+                "steps": 5
+            },
+        },
+        "bomb-sites" : {
+            "A" : {"x" : 4, "y" : 4, "w" : 2, "h" : 2, "z" : 0, "height_z" : 0.0}
+        }
+    }
+    test_map = Map.from_json(test_map_json)
+    
+    return test_map
 
 def make_round(players, attacker_ids, defender_ids, map_data=None, **kwargs):
     from app.simulation.models.map import Map
@@ -164,7 +241,8 @@ def test_buying_shields_assigns_correct_shield():
     round_obj3._process_buy_phase(time_step=0.1)
     assert player3.shield is None
 
-def test_round_integration_two_players():
+def test_round_integration_two_players(mock_map):
+    from app.simulation.models.weapon import WeaponFactory
     # Create two players and a minimal map
     attacker = DummyPlayer("a0", "attackers")
     defender = DummyPlayer("d0", "defenders")
@@ -176,21 +254,14 @@ def test_round_integration_two_players():
     attacker.location = (0.0, 0.0, 0.0)
     attacker.is_moving = False
     attacker.movement_direction = None
-    attacker.weapon = "Vandal"
     defender.location = (1.0, 0.0, 0.0)
     defender.is_moving = False
-    defender.weapon = "Vandal"
     defender.movement_direction = None
     
     # Ensure all locations are 3-tuples before simulation
     for p in players.values():
         if len(p.location) == 2:
             p.location = (p.location[0], p.location[1], 0.0)
-            
-    # Create a Map object
-    map_obj = Map(name="Test Map", width=32, height=32)
-    map_obj.attacker_spawns = [(0.0, 0.0, 0.0)]
-    map_obj.defender_spawns = [(1.0, 0.0, 0.0)]
     
     # Create round
     round_obj = Round(
@@ -201,8 +272,12 @@ def test_round_integration_two_players():
         map_data={},  # Empty map_data as we're using map_obj
         attacker_blackboard=Blackboard("attackers"),
         defender_blackboard=Blackboard("defenders"),
-        map_obj=map_obj
+        map_obj=mock_map
     )
+
+    round_obj.phase = RoundPhase.ROUND
+    attacker.weapon = WeaponFactory.create_weapon_catalog()["Vandal"]
+    defender.weapon = WeaponFactory.create_weapon_catalog()["Vandal"]
     
     # Ensure all locations are 3-tuples after round initialization
     for p in players.values():
@@ -216,7 +291,8 @@ def test_round_integration_two_players():
     defender.alive = True
     
     # Simulate the round (should end with one winner)
-    result = round_obj.simulate(time_step=0.1)
+    while round_obj.phase != RoundPhase.END:
+        round_obj.update(time_step=1.0)
     assert round_obj.phase == RoundPhase.END
     assert round_obj.round_winner in [RoundWinner.ATTACKERS, RoundWinner.DEFENDERS]
     
@@ -254,24 +330,31 @@ def test_weapon_pickup_and_drop_unit():
     player.location = (5.0, 5.0)
     player.weapon = None
     player.alive = True
-    
+
+    # Get weapon catalog
+    weapon_catalog = WeaponFactory.create_weapon_catalog()
+
     # Simulate a dropped weapon at the same location
-    from app.simulation.models.round import DroppedWeapon, RoundPhase
-    dropped = DroppedWeapon(weapon_type="Vandal", ammo=20, position=(5.0, 5.0), dropped_time=0.0)
-    
+    dropped = DroppedWeapon(
+        weapon=weapon_catalog["Vandal"],
+        ammo=20,
+        position=(5.0, 5.0),
+        dropped_time=0.0
+    )
+
     # Create a minimal round object with at least one defender
     defender = DummyPlayer("d1", "defenders")
     players = {player.id: player, defender.id: defender}
-    
+
     # Create a Map object
     map_obj = Map(name="Test Map", width=32, height=32)
     map_obj.attacker_spawns = [(5.0, 5.0, 0.0)]
     map_obj.defender_spawns = [(0.0, 0.0, 0.0)]
-    
+
     round_obj = make_round(players, [player.id], [defender.id], map_obj=map_obj)
     round_obj.dropped_weapons = [dropped]
     round_obj.phase = RoundPhase.ROUND  # Enable pickup logic
-    
+
     # Patch all player locations to 3D tuple if needed
     for p in round_obj.players.values():
         loc = p.location
@@ -279,12 +362,12 @@ def test_weapon_pickup_and_drop_unit():
             p.location = (loc[0], loc[1], 0.0)
     player.location = round_obj.players[player.id].location
     assert len(player.location) == 3, f"player.location is not 3D: {player.location}"
-    
+
     # Simulate movement to trigger pickup
     round_obj._simulate_player_movements(time_step=0.1)
-    assert player.weapon == "Vandal"
+    assert player.weapon.name == "Vandal"
     assert len(round_obj.dropped_weapons) == 0
-    
+
     # Now drop the weapon
     round_obj._drop_weapon(player.id, player.weapon, (5.0, 5.0))
     assert player.weapon is None
@@ -294,25 +377,30 @@ def test_weapon_pickup_swap():
     # Player already has a weapon, picks up another
     player = DummyPlayer("p2", "attackers")
     player.location = (10.0, 10.0)
-    player.weapon = "Spectre"
+    weapon_catalog = WeaponFactory.create_weapon_catalog()
+    player.weapon = weapon_catalog["Spectre"]
     player.alive = True
-    
-    from app.simulation.models.round import DroppedWeapon, RoundPhase
-    dropped = DroppedWeapon(weapon_type="Vandal", ammo=20, position=(10.0, 10.0), dropped_time=0.0)
-    
+
+    dropped = DroppedWeapon(
+        weapon=weapon_catalog["Vandal"],
+        ammo=20,
+        position=(10.0, 10.0),
+        dropped_time=0.0
+    )
+
     # Add a dummy defender
     defender = DummyPlayer("d2", "defenders")
     players = {player.id: player, defender.id: defender}
-    
+
     # Create a Map object
     map_obj = Map(name="Test Map", width=32, height=32)
     map_obj.attacker_spawns = [(10.0, 10.0, 0.0)]
     map_obj.defender_spawns = [(0.0, 0.0, 0.0)]
-    
+
     round_obj = make_round(players, [player.id], [defender.id], map_obj=map_obj)
     round_obj.dropped_weapons = [dropped]
     round_obj.phase = RoundPhase.ROUND  # Enable pickup logic
-    
+
     # Patch all player locations to 3D tuple if needed
     for p in round_obj.players.values():
         loc = p.location
@@ -320,14 +408,14 @@ def test_weapon_pickup_swap():
             p.location = (loc[0], loc[1], 0.0)
     player.location = round_obj.players[player.id].location
     assert len(player.location) == 3, f"player.location is not 3D: {player.location}"
-    
+
     # Simulate movement to trigger pickup
     round_obj._simulate_player_movements(time_step=0.1)
-    assert player.weapon == "Vandal"
-    assert any(w.weapon_type == "Spectre" for w in round_obj.dropped_weapons)
-    assert not any(w.weapon_type == "Vandal" for w in round_obj.dropped_weapons)
+    assert player.weapon.name == "Vandal"
+    assert any(w.weapon.name == "Spectre" for w in round_obj.dropped_weapons)
+    assert not any(w.weapon.name == "Vandal" for w in round_obj.dropped_weapons)
 
-def test_spike_plant_success():
+def test_spike_plant_success(mock_map):
     """Test that an attacker can plant the spike at a valid site and it is marked as planted."""
     from app.simulation.models.round import Round, RoundPhase
     
@@ -346,17 +434,7 @@ def test_spike_plant_success():
     attacker_ids = [attacker.id]
     defender_ids = [defender.id]
     
-    # Create a Map object with a bomb site
-    map_obj = Map(name="Test Map", width=32, height=32)
-    map_obj.attacker_spawns = [(0.0, 0.0, 0.0)]
-    map_obj.defender_spawns = [(10.0, 0.0, 0.0)]
-    
-    # Add a bomb site at the attacker's position
-    map_obj.bomb_sites["A"] = MapBoundary(
-        4.0, 4.0, 2.0, 2.0, "bomb-site", "A", 0, 0.0, 0.0
-    )
-    
-    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=map_obj)
+    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=mock_map)
     round_obj.phase = RoundPhase.ROUND
     round_obj.spike_carrier_id = attacker.id
     attacker.spike = True
@@ -374,7 +452,7 @@ def test_spike_plant_success():
     assert attacker.plants == 1
     assert round_obj.spike_position == attacker.location
 
-def test_spike_plant_fail_wrong_location():
+def test_spike_plant_fail_wrong_location(mock_map):
     """Test that planting fails if not at a valid plant site."""
     from app.simulation.models.round import RoundPhase
     attacker = DummyPlayer("a0", "attackers")
@@ -387,27 +465,28 @@ def test_spike_plant_fail_wrong_location():
     players = {attacker.id: attacker, defender.id: defender}
     attacker_ids = [attacker.id]
     defender_ids = [defender.id]
-    map_obj = Map(name="Test Map", width=32, height=32)
-    map_obj.attacker_spawns = [(0.0, 0.0, 0.0)]
-    map_obj.defender_spawns = [(10.0, 0.0, 0.0)]
-    # Add a bomb site at a different location
-    map_obj.bomb_sites["A"] = MapBoundary(5.0 - 1.0, 5.0 - 1.0, 2.0, 2.0, "bomb-site", "A", 0, 0.0, 0.0)
-    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=map_obj)
+    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=mock_map)
     round_obj.phase = RoundPhase.ROUND
     round_obj.spike_carrier_id = attacker.id
     attacker.spike = True
     attacker.plant_progress = 0.0
     time_step = 0.5
     attacker.update_movement = lambda *a, **kw: None
+    attacker.weapon = None
+    defender.weapon = None
+
+
     attacker.start_plant(round_obj)
+    print(f"Attacker is alive: {attacker.alive}")
     for _ in range(10):
         attacker.location = (0.0, 0.0, 0.0)
         round_obj.update(time_step)
+        print(f"Attacker is alive: {attacker.alive}")
     assert not round_obj.spike_planted
     assert attacker.spike
     assert attacker.plants == 0
 
-def test_spike_defuse_success():
+def test_spike_defuse_success(mock_map):
     """Test that a defender can defuse the spike at the correct location."""
     from app.simulation.models.round import RoundPhase, RoundWinner, RoundEndCondition
     attacker = DummyPlayer("a0", "attackers")
@@ -420,16 +499,14 @@ def test_spike_defuse_success():
     players = {attacker.id: attacker, defender.id: defender}
     attacker_ids = [attacker.id]
     defender_ids = [defender.id]
-    map_obj = Map(name="Test Map", width=32, height=32)
-    map_obj.attacker_spawns = [(0.0, 0.0, 0.0)]
-    map_obj.defender_spawns = [(10.0, 0.0, 0.0)]
-    map_obj.bomb_sites["A"] = MapBoundary(5.0 - 1.0, 5.0 - 1.0, 2.0, 2.0, "bomb-site", "A", 0, 0.0, 0.0)
-    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=map_obj)
+    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=mock_map)
     round_obj.phase = RoundPhase.ROUND
     round_obj.spike_carrier_id = attacker.id
     round_obj.spike_planted = True
     round_obj.spike_position = (5.0, 5.0, 0.0)
     round_obj.spike_time_remaining = 45.0
+    attacker.weapon = None
+    defender.weapon = None
     defender.update_movement = lambda *a, **kw: None
     time_step = 0.5
     defender.start_defuse(round_obj)
@@ -443,7 +520,7 @@ def test_spike_defuse_success():
     assert round_obj.round_winner == RoundWinner.DEFENDERS
     assert round_obj.round_end_condition == RoundEndCondition.SPIKE_DEFUSED
 
-def test_spike_defuse_fail_wrong_location():
+def test_spike_defuse_fail_wrong_location(mock_map):
     """Test that defusing fails if not at the spike location."""
     from app.simulation.models.round import RoundPhase
     attacker = DummyPlayer("a0", "attackers")
@@ -456,11 +533,7 @@ def test_spike_defuse_fail_wrong_location():
     players = {attacker.id: attacker, defender.id: defender}
     attacker_ids = [attacker.id]
     defender_ids = [defender.id]
-    map_obj = Map(name="Test Map", width=32, height=32)
-    map_obj.attacker_spawns = [(0.0, 0.0, 0.0)]
-    map_obj.defender_spawns = [(10.0, 0.0, 0.0)]
-    map_obj.bomb_sites["A"] = MapBoundary(5.0 - 1.0, 5.0 - 1.0, 2.0, 2.0, "bomb-site", "A", 0, 0.0, 0.0)
-    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=map_obj)
+    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=mock_map)
     round_obj.phase = RoundPhase.ROUND
     round_obj.spike_carrier_id = attacker.id
     round_obj.spike_planted = True
@@ -473,7 +546,7 @@ def test_spike_defuse_fail_wrong_location():
     assert round_obj.spike_planted
     assert defender.defuses == 0
 
-def test_spike_detonation_ends_round():
+def test_spike_detonation_ends_round(mock_map):
     """Test that the round ends with attackers winning if spike detonates."""
     from app.simulation.models.round import RoundPhase, RoundWinner, RoundEndCondition
     attacker = DummyPlayer("a0", "attackers")
@@ -483,11 +556,7 @@ def test_spike_detonation_ends_round():
     players = {attacker.id: attacker, defender.id: defender}
     attacker_ids = [attacker.id]
     defender_ids = [defender.id]
-    map_obj = Map(name="Test Map", width=32, height=32)
-    map_obj.attacker_spawns = [(0.0, 0.0, 0.0)]
-    map_obj.defender_spawns = [(10.0, 0.0, 0.0)]
-    map_obj.bomb_sites["A"] = MapBoundary(5.0 - 1.0, 5.0 - 1.0, 2.0, 2.0, "bomb-site", "A", 0, 0.0, 0.0)
-    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=map_obj)
+    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=mock_map)
     round_obj.phase = RoundPhase.ROUND
     round_obj.spike_carrier_id = attacker.id
     round_obj.spike_planted = True
@@ -509,7 +578,7 @@ def test_spike_detonation_ends_round():
     assert round_obj.round_end_condition == RoundEndCondition.SPIKE_DETONATION
     assert round_obj.phase == RoundPhase.END
 
-def test_spike_defuse_ends_round():
+def test_spike_defuse_ends_round(mock_map):
     """Test that the round ends with defenders winning if spike is defused."""
     from app.simulation.models.round import RoundPhase, RoundWinner, RoundEndCondition
     attacker = DummyPlayer("a0", "attackers")
@@ -522,16 +591,14 @@ def test_spike_defuse_ends_round():
     players = {attacker.id: attacker, defender.id: defender}
     attacker_ids = [attacker.id]
     defender_ids = [defender.id]
-    map_obj = Map(name="Test Map", width=32, height=32)
-    map_obj.attacker_spawns = [(0.0, 0.0, 0.0)]
-    map_obj.defender_spawns = [(10.0, 0.0, 0.0)]
-    map_obj.bomb_sites["A"] = MapBoundary(5.0 - 1.0, 5.0 - 1.0, 2.0, 2.0, "bomb-site", "A", 0, 0.0, 0.0)
-    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=map_obj)
+    round_obj = make_round(players, attacker_ids, defender_ids, map_obj=mock_map)
     round_obj.phase = RoundPhase.ROUND
     round_obj.spike_carrier_id = attacker.id
     round_obj.spike_planted = True
     round_obj.spike_position = (5.0, 5.0, 0.0)
     round_obj.spike_time_remaining = 45.0
+    attacker.weapon = None
+    defender.weapon = None
     # Set location after round creation to override spawn jitter
     defender.location = (5.0, 5.0, 0.0)
     defender.defuse_progress = 0.0

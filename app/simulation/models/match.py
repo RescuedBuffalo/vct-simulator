@@ -2,7 +2,7 @@ from app.simulation.models.player import Player
 from app.simulation.models.map import Map
 from app.simulation.models.round import Round, RoundResult, RoundWinner, RoundEndCondition, DeathEvent
 from app.simulation.models.team import Team
-from app.simulation.models.weapon import Weapon
+from app.simulation.models.weapon import Weapon, WeaponFactory
 from app.simulation.models.ability import AbilityInstance
 from app.simulation.models.match_stats import MatchStats
 
@@ -20,6 +20,7 @@ class Match:
         self.round = round
         self.team_a = team_a
         self.team_b = team_b
+        self.weapon_catalog = WeaponFactory.create_weapon_catalog()
 
         self.map_picked_by = None
         self.starting_side = None # the team that DID NOT pick the map, chooses the side they will start on
@@ -193,7 +194,7 @@ class Match:
                     player.weapon = None
                     player.shield = None
                 player.health = 100
-                player.status_effects = []
+                player.status_effects = {}  # Reset status effects to empty dict
                 player.alive = True
                 player.spike = False
                 player.is_planting = False
@@ -352,7 +353,7 @@ class Match:
         # Extract data from death event
         victim_id = death_event.victim_id
         killer_id = death_event.killer_id
-        weapon = death_event.weapon
+        weapon = death_event.weapon.name if isinstance(death_event.weapon, Weapon) else death_event.weapon  # Convert to name if it's a Weapon object
         time = death_event.time
         position = death_event.position
         is_headshot = death_event.is_headshot
@@ -374,7 +375,7 @@ class Match:
             time=time,
             killer_id=killer_id,
             victim_id=victim_id,
-            weapon=weapon,
+            weapon=weapon,  # Now passing weapon name
             is_headshot=is_headshot,
             position=position,
             is_wallbang=is_wallbang,
@@ -464,30 +465,9 @@ class Match:
         """Calculate the equipment value for a player."""
         value = 0
         
-        # Weapon values
-        weapon_values = {
-            "Classic": 0,    # Free
-            "Shorty": 150,
-            "Frenzy": 450,
-            "Ghost": 500,
-            "Sheriff": 800,
-            "Stinger": 950,
-            "Spectre": 1600,
-            "Bucky": 850,
-            "Judge": 1850,
-            "Bulldog": 2050,
-            "Guardian": 2250,
-            "Phantom": 2900,
-            "Vandal": 2900,
-            "Marshal": 950,
-            "Operator": 4700,
-            "Ares": 1600,
-            "Odin": 3200
-        }
-        
         # Add weapon value
-        if player.weapon and player.weapon in weapon_values:
-            value += weapon_values[player.weapon]
+        if player.weapon:
+            value += player.weapon.cost
         
         # Add shield value
         if player.shield == "light":

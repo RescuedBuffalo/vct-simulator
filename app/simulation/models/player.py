@@ -1,8 +1,10 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Tuple, Optional, Dict, List
 from dataclasses import dataclass, field
 import math
 import random
 
+from app.simulation.models.map import Map
+from app.simulation.models.weapon import Weapon, WeaponFactory
 
 @dataclass
 class Player:
@@ -54,7 +56,7 @@ class Player:
     ground_contact: bool = True  # Whether player is touching the ground
     last_ground_z: float = 0.0  # Z coordinate when player was last on ground
     
-    status_effects: List[str] = field(default_factory=list)  # "flashed", "slowed", "vulnerable", etc.
+    status_effects: Dict[str, float] = field(default_factory=dict)  # "flashed", "slowed", "vulnerable", etc.
 
     # Utility Stats
     utility_knowledge: Dict[str, float] = field(default_factory=dict)  # e.g. {"smoke": 0.8, "flash": 0.6}
@@ -64,8 +66,8 @@ class Player:
 
     # Inventory
     creds: int = 800
-    weapon: Optional[str] = None  # current main gun
-    secondary: Optional[str] = "Classic"
+    weapon: Optional[Weapon] = None  # current main gun
+    secondary: Optional[Weapon] = field(default_factory=lambda: WeaponFactory.create_weapon_catalog()["Classic"])  # Default pistol
     shield: Optional[str] = None  # "light", "heavy", or None
     spike: bool = False  # True if player has spike
 
@@ -126,7 +128,7 @@ class Player:
     def get_current_max_speed(self) -> float:
         """Get the current maximum speed based on player state."""
         # Check for status effects that modify speed
-        if "slowed" in self.status_effects:
+        if "slowed" in list(self.status_effects.keys()):
             return self.max_speed * 0.6  # 60% of normal speed when slowed
         
         # In air movement is slightly slower
@@ -181,7 +183,7 @@ class Player:
         self.velocity = (self.velocity[0], self.velocity[1], self.jump_speed)
         self.last_ground_z = self.location[2]
         
-    def update_movement(self, time_step: float, game_map):
+    def update_movement(self, time_step: float, game_map: Map):
         """
         Update player movement based on inputs, physics, and collisions.
         
@@ -598,10 +600,12 @@ class Player:
 
     def start_plant(self, round_obj=None):
         """Start planting the spike and notify the round if provided."""
-        self.is_planting = True
-        self.plant_progress = 0.0
-        if round_obj is not None:
-            round_obj.notify_planting_started(self)
+        if round_obj._is_at_plant_site(self.location):
+            print(f"Player {self.id} is at a plant site and starting to plant")
+            self.is_planting = True
+            self.plant_progress = 0.0
+            if round_obj is not None:
+                round_obj.notify_planting_started(self)
 
     def stop_plant(self, round_obj=None):
         """Stop planting the spike and notify the round if provided."""
@@ -650,7 +654,7 @@ class Player:
         obs["is_defusing"] = self.is_defusing
         obs["plant_progress"] = self.plant_progress
         obs["defuse_progress"] = self.defuse_progress
-        obs["status_effects"] = list(self.status_effects)
+        obs["status_effects"] = list(self.status_effects.keys())
         obs["velocity"] = tuple(self.velocity)
         obs["is_walking"] = self.is_walking
         obs["is_crouching"] = self.is_crouching
@@ -658,8 +662,8 @@ class Player:
         obs["is_falling"] = self.is_falling
         obs["ground_contact"] = self.ground_contact
         obs["creds"] = self.creds
-        obs["weapon"] = self.weapon
-        obs["secondary"] = self.secondary
+        obs["weapon"] = self.weapon.name if self.weapon else None
+        obs["secondary"] = self.secondary.name if self.secondary else None
         obs["shield"] = self.shield
         obs["spike"] = self.spike
         obs["ult_points"] = self.ult_points

@@ -108,7 +108,7 @@ class Team:
             player.visible_enemies = []
             player.heard_sounds = []
             player.known_enemy_positions = {}
-            player.status_effects = []
+            player.status_effects = {}  # Reset status effects to empty dict
             player.velocity = (0.0, 0.0)
             player.utility_active = []
         

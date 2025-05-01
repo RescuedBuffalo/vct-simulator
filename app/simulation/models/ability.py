@@ -5,6 +5,8 @@ import math
 import uuid
 import time
 import random
+from app.simulation.models.map import Map
+from app.simulation.models.player import Player
 
 class AbilityType(Enum):
     """Types of abilities in Valorant."""
@@ -114,129 +116,518 @@ class AbilityDefinition:
 
 @dataclass
 class AbilityInstance:
-    """
-    An instance of an ability being used in the game.
-    This represents an actual ability usage with its current state.
-    """
-    # Reference to definition
+    """Base class for ability instances."""
     definition: AbilityDefinition
-    
-    # Instance state
     owner_id: str
     instance_id: str
     charges_remaining: int
     is_active: bool = False
     cooldown_remaining: float = 0.0
-    
-    # Current projectile position (3D) and state
-    origin: Optional[Tuple[float, float, float]] = None
-    direction3d: Optional[Tuple[float, float, float]] = None
-    velocity3d: Optional[Tuple[float, float, float]] = None
     current_position3d: Optional[Tuple[float, float, float]] = None
-    range_traveled: float = 0.0                  # distance traveled so far
-    effect_applied: bool = False                 # area effect deployed
-    # Current effect
-    current_position: Optional[Tuple[float, float]] = None
     affected_players: Set[str] = field(default_factory=set)
+    effect_applied: bool = False
     start_time: float = 0.0
     end_time: Optional[float] = None
     
-    # For projectile-based abilities
-    trajectory: List[Tuple[float, float]] = field(default_factory=list)
-    velocity: Optional[Tuple[float, float]] = None
-
-    def __post_init__(self):
-        """Initialize base ability state."""
-        pass
-
-    def activate(self, current_time: float, origin: Tuple[float, float, float], direction: Tuple[float, float, float]):
-        """Activate this ability: handle cast/formation, projectile launch, or immediate area effect."""
+    def activate(self, current_time: float, origin: Tuple[float, float, float], direction: Tuple[float, float, float]) -> None:
+        """Activate the ability."""
         self.is_active = True
-        # Account for any cast_time (formation_time)
-        cast_delay = self.definition.cast_time or self.definition.properties.get('formation_time', 0.0)
         self.start_time = current_time
-        # End of ability effect
-        self.end_time = current_time + self.definition.duration
-        # Store origin and direction in 3D
-        self.origin = origin
-        self.direction3d = direction
-        # Initialize projectile if needed
-        speed = self.definition.properties.get('projectile_speed', 0.0)
-        vx = direction[0] * speed
-        vy = direction[1] * speed
-        vz = direction[2] * speed
-        self.velocity3d = (vx, vy, vz)
-        # Initialize position and trajectory
         self.current_position3d = origin
-        self.trajectory = [origin]
-        # Reset range and effect flag
-        self.range_traveled = 0.0
-        self.effect_applied = False
-        # Consume a charge and set cooldown
-        self.charges_remaining = max(0, self.charges_remaining - 1)
-        self.cooldown_remaining = self.definition.cooldown
-
-    def apply_effect(self, game_map: Any, players: List[Any]):
-        """Deploy the ability's effect (damage, status, vision_block, etc.) at current position."""
-        if not self.current_position3d:
-            return
-        x, y, z = self.current_position3d
-        # Area effect
-        affected = False
-        for p in players:
-            px, py, pz = p.location
-            dist = math.sqrt((px - x)**2 + (py - y)**2 + (pz - z)**2)
-            if dist <= self.definition.effect_radius:
-                # Damage
-                if self.definition.damage > 0:
-                    p.apply_damage(int(self.definition.damage))
-                # Healing
-                if self.definition.healing > 0:
-                    p.health = min(p.health + int(self.definition.healing), 100)
-                # Status effects
-                for status in self.definition.status_effects:
-                    if status not in p.status_effects:
-                        p.status_effects.append(status)
-                self.affected_players.add(p.id)
-                affected = True
-        # Set effect_applied if any player was affected or if it's a non-player-affecting ability
-        self.effect_applied = affected or self.definition.blocks_vision
-
-    def is_available(self) -> bool:
-        """Check if ability can be used."""
-        return (
-            self.charges_remaining > 0 and
-            self.cooldown_remaining <= 0 and
-            not self.is_active
-        )
-    
+        if self.definition.duration > 0:
+            self.end_time = current_time + self.definition.duration
+        self.charges_remaining -= 1
+        
+    def update(self, time_step: float, current_time: float, game_map: Optional[Any], players: List[Any]) -> None:
+        """Update ability state."""
+        if self.end_time and current_time >= self.end_time:
+            self.is_active = False
+        
     def get_remaining_duration(self, current_time: float) -> float:
         """Get remaining duration of active ability."""
         if not self.is_active or not self.end_time:
             return 0.0
         return max(0.0, self.end_time - current_time)
-
-    def update(self, time_step: float, current_time: float, game_map: Any, players: List[Any]):
-        """Progress cooldown, scheduling and delegate simulation to tick() hook."""
-        # Cooldown countdown
-        if self.cooldown_remaining > 0:
-            self.cooldown_remaining = max(0.0, self.cooldown_remaining - time_step)
-        # Not yet time to start
-        if current_time < self.start_time:
+        
+    def apply_effect(self, game_state: Optional[Any], players: List[Any]) -> None:
+        """Apply ability effect to players."""
+        if not self.current_position3d or not self.is_active:
             return
-        # Delegate to subclass
-        self.tick(time_step, current_time, game_map, players)
-        # Expire if duration passed
-        if current_time >= self.end_time:
+            
+        x, y, z = self.current_position3d
+        self.effect_applied = False
+        
+        for player in players:
+            if not player.is_alive:
+                continue
+                
+            # Get player position
+            px, py, pz = player.location
+            
+            # Calculate distance to player
+            dx = x - px
+            dy = y - py
+            dz = z - pz
+            dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+            
+            # Check if player is in range
+            if dist <= self.definition.effect_radius:  # Use effect_radius
+                self.affected_players.add(player.id)
+                
+                # Apply damage
+                if self.definition.damage > 0:
+                    if hasattr(player, 'apply_damage'):
+                        player.apply_damage(int(self.definition.damage))
+                    else:
+                        if player.armor > 0:
+                            armor_damage = min(player.armor, self.definition.damage * 0.5)
+                            player.armor -= armor_damage
+                            player.health -= self.definition.damage - armor_damage
+                        else:
+                            player.health -= self.definition.damage
+                            
+                # Apply healing
+                if self.definition.healing > 0:
+                    player.health = min(player.health + int(self.definition.healing), 100)
+                    
+                # Apply status effects
+                for status in self.definition.status_effects:
+                    if status not in list(player.status_effects.keys()):
+                        player.status_effects[status] = self.definition.duration
+                        
+                self.effect_applied = True
+
+@dataclass
+class ProjectileAbilityInstance(AbilityInstance):
+    """Base class for projectile abilities."""
+    origin: Optional[Tuple[float, float, float]] = None
+    direction3d: Optional[Tuple[float, float, float]] = None
+    velocity3d: Optional[Tuple[float, float, float]] = None
+    range_traveled: float = 0.0
+    trajectory: List[Tuple[float, float, float]] = field(default_factory=list)
+    velocity: Optional[Tuple[float, float, float]] = None
+    bounces_remaining: int = 1
+    
+    def activate(self, current_time: float, origin: Tuple[float, float, float], direction: Tuple[float, float, float]) -> None:
+        """Activate the projectile ability."""
+        super().activate(current_time, origin, direction)
+        self.origin = origin
+        self.direction3d = direction
+        self.velocity3d = (direction[0] * 20.0, direction[1] * 20.0, direction[2] * 20.0)  # Default velocity
+        self.trajectory = [origin]
+        
+    def update(self, time_step: float, current_time: float, game_map: Optional[Any], players: List[Any]) -> None:
+        """Update projectile state."""
+        super().update(time_step, current_time, game_map, players)
+        
+        if not self.is_active or not self.velocity3d or not self.current_position3d:
+            return
+            
+        # Update position
+        x, y, z = self.current_position3d
+        vx, vy, vz = self.velocity3d
+        new_x = x + vx * time_step
+        new_y = y + vy * time_step
+        new_z = z + vz * time_step
+        
+        # Check collision with map
+        if game_map:
+            t, hit_point, hit_obj = game_map.raycast(origin=(x, y, z), direction=(vx, vy, vz), max_range=self.definition.max_range)
+            if hit_point:
+                if self.bounces_remaining > 0:
+                    self.bounces_remaining -= 1
+                    self.velocity3d = (-vx, -vy, vz)  # Simple bounce
+                else:
+                    self.current_position3d = hit_point
+                    self.apply_effect(game_map, players)
+                    self.is_active = False
+                    return
+                    
+        # Update position and trajectory
+        self.current_position3d = (new_x, new_y, new_z)
+        self.trajectory.append(self.current_position3d)
+        
+        # Check max range
+        self.range_traveled += math.sqrt((new_x - x)**2 + (new_y - y)**2 + (new_z - z)**2)
+        if self.range_traveled >= self.definition.max_range:
+            self.apply_effect(game_map, players)
             self.is_active = False
 
+@dataclass
+class AreaAbilityInstance(AbilityInstance):
+    """Handles abilities that apply effects instantly or in an area."""
     def tick(self, time_step: float, current_time: float, game_map: Any, players: List[Any]):
-        """Subclass hook to implement per-frame behavior."""
-        pass
+        """Apply area effect and maintain it."""
+        # Skip if not active
+        if not self.is_active:
+            return
+            
+        # Wait for formation time
+        if current_time < self.start_time:
+            return
+            
+        # Apply initial effect
+        if not self.effect_applied:
+            self.apply_effect(game_map, players)
+            self.effect_applied = True
+        
+        # Continue applying effect to players in area
+        if self.current_position3d:
+            x, y, z = self.current_position3d
+            for player in players:
+                px, py, pz = player.location
+                dist = math.sqrt((px - x)**2 + (py - y)**2 + (pz - z)**2)
+                if dist <= self.definition.effect_radius:
+                    # Apply continuous effects
+                    if self.definition.damage > 0:
+                        player.apply_damage(int(self.definition.damage * time_step))
+                    if self.definition.healing > 0:
+                        player.health = min(100, player.health + int(self.definition.healing * time_step))
+                    # Add to affected players
+                    self.affected_players.add(player.id)
+                    # Apply status effects
+                    for status in self.definition.status_effects:
+                        if status not in list(player.status_effects.keys()):
+                            player.status_effects[status] = self.definition.duration
 
-    def __repr__(self) -> str:
-        return (f"{self.__class__.__name__}(def={self.definition.name}, active={self.is_active}, "
-                f"pos={self.current_position3d or self.origin}, charges={self.charges_remaining})")
+@dataclass
+class FlashAbilityInstance(ProjectileAbilityInstance):
+    """Instance of a flash ability."""
+    
+    def apply_effect(self, game_map: Optional[Map], players: List[Player]) -> None:
+        """Apply flash effect to players based on their view direction relative to the flash."""
+        if not self.current_position3d or not self.is_active or not game_map:
+            return
+        # Use self as the source for FOV calculation
+        self.location = self.current_position3d  # Ensure self has a location attribute
+        self.direction = 0  # Flash has no facing, so use 0 (360 FOV)
+        visible_players = game_map.calculate_player_fov(self, players, fov_angle=360.0, max_distance=self.definition.effect_radius)
+        for player in visible_players:
+            if not player.is_alive:
+                continue
+            x, y, z = self.current_position3d
+            px, py, pz = player.location
+            dx = x - px
+            dy = y - py
+            dz = z - pz
+            length = math.sqrt(dx*dx + dy*dy + dz*dz)
+            if length == 0:
+                continue
+            dx, dy, dz = dx/length, dy/length, dz/length
+            vx, vy, vz = player.view_direction
+            dot = dx*vx + dy*vy + dz*vz
+            if dot > 0.7:
+                self.affected_players.add(player.id)
+                player.status_effects["flashed"] = self.definition.duration
+
+    def update(self, time_step: float, current_time: float, game_map: Optional[Any], players: List[Any]) -> None:
+        """Update flash state."""
+        super().update(time_step, current_time, game_map, players)
+        
+        # Apply flash effect if active
+        if self.is_active:
+            self.apply_effect(game_map, players)
+        
+        # If flash is no longer active, remove effects from affected players
+        if not self.is_active:
+            for player_id in self.affected_players:
+                player = self.get_player_by_id(player_id)
+                if player and "flashed" in list(player.status_effects.keys()):
+                    del player.status_effects["flashed"]
+
+@dataclass
+class SmokeAbilityInstance(ProjectileAbilityInstance):
+    """Instance of a smoke ability."""
+    
+    def activate(self, current_time: float, origin: Tuple[float, float, float], direction: Tuple[float, float, float]) -> None:
+        """Activate the smoke ability."""
+        super().activate(current_time, origin, direction)
+        self.current_position3d = origin  # Smoke stays at origin
+        self.is_active = True  # Ensure smoke is active
+        
+    def apply_effect(self, game_state: Optional[Any], players: List[Any]) -> None:
+        """Apply smoke effect to players in range."""
+        if not self.current_position3d or not self.is_active:
+            return
+            
+        x, y, z = self.current_position3d
+        self.effect_applied = False
+        self.affected_players.clear()  # Clear affected players before applying effect
+        
+        for player in players:
+            if not player.is_alive:
+                continue
+                
+            # Get player position
+            px, py, pz = player.location
+            
+            # Calculate distance to player
+            dx = x - px
+            dy = y - py
+            dz = z - pz
+            dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+            
+            # Check if player is in range
+            if dist <= self.definition.effect_radius:  # Use effect_radius
+                self.affected_players.add(player.id)
+                if "smoked" not in list(player.status_effects.keys()):
+                    player.status_effects["smoked"] = self.definition.duration
+                self.effect_applied = True
+                
+    def update(self, time_step: float, current_time: float, game_map: Optional[Any], players: List[Any]) -> None:
+        """Update smoke state."""
+        super().update(time_step, current_time, game_map, players)
+        
+        # Apply smoke effect if active
+        if self.is_active:
+            self.apply_effect(game_map, players)
+            
+        # If smoke is no longer active, remove effects from affected players
+        if not self.is_active:
+            for player_id in self.affected_players:
+                player = self.get_player_by_id(player_id)
+                if player and "smoked" in list(player.status_effects.keys()):
+                    del player.status_effects["smoked"]
+
+@dataclass
+class MollyAbilityInstance(ProjectileAbilityInstance):
+    """Instance of a molly ability."""
+    
+    def activate(self, current_time: float, origin: Tuple[float, float, float], direction: Tuple[float, float, float]) -> None:
+        """Activate the molly ability."""
+        super().activate(current_time, origin, direction)
+        self.current_position3d = origin  # Molly stays at origin
+        self.is_active = True  # Ensure molly is active
+        
+    def apply_effect(self, game_state: Optional[Any], players: List[Any]) -> None:
+        """Apply molly effect to players in range."""
+        if not self.current_position3d or not self.is_active:
+            return
+            
+        x, y, z = self.current_position3d
+        self.effect_applied = False
+        self.affected_players.clear()  # Clear affected players before applying effect
+        
+        for player in players:
+            if not player.is_alive:
+                continue
+                
+            # Get player position
+            px, py, pz = player.location
+            
+            # Calculate distance to player
+            dx = x - px
+            dy = y - py
+            dz = z - pz
+            dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+            
+            # Check if player is in range
+            if dist <= self.definition.effect_radius:  # Use effect_radius
+                self.affected_players.add(player.id)
+                if "burning" not in list(player.status_effects.keys()):
+                    player.status_effects["burning"] = self.definition.duration
+                
+                # Apply damage
+                damage = self.definition.damage  # Second param is damage
+                if hasattr(player, 'apply_damage'):
+                    player.apply_damage(int(damage))
+                else:
+                    if player.armor > 0:
+                        armor_damage = min(player.armor, damage * 0.5)  # Armor takes 50% of damage
+                        player.armor = max(0, player.armor - armor_damage)  # Ensure armor doesn't go negative
+                        player.health = max(0, player.health - (damage - armor_damage))  # Remaining damage to health
+                    else:
+                        player.health = max(0, player.health - damage)  # Full damage to health
+                    
+                self.effect_applied = True
+                
+    def update(self, time_step: float, current_time: float, game_map: Optional[Any], players: List[Player]) -> None:
+        """Update molly state."""
+        super().update(time_step, current_time, game_map, players)
+        
+        # Apply damage over time if active
+        if self.is_active:
+            self.apply_effect(game_map, players)
+        
+        # If molly is no longer active, remove effects from affected players
+        if not self.is_active:
+            for player in players:
+                if player.id in self.affected_players:
+                    if "burning" in list(player.status_effects.keys()):
+                        del player.status_effects["burning"]
+
+@dataclass
+class ReconAbilityInstance(ProjectileAbilityInstance):
+    """Instance of a recon ability."""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pulse_timer = 0.0
+    
+    def apply_effect(self, game_state: Optional[Any], players: List[Any]) -> None:
+        """Apply recon effect to players in range."""
+        if not self.current_position3d or not self.is_active:
+            return
+            
+        x, y, z = self.current_position3d
+        self.effect_applied = False
+        
+        for player in players:
+            if not player.is_alive:
+                continue
+                
+            # Get player position
+            px, py, pz = player.location
+            
+            # Calculate distance to player
+            dx = x - px
+            dy = y - py
+            dz = z - pz
+            dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+            
+            # Check if player is in range
+            if dist <= self.definition.effect_radius:  # Use effect_radius
+                self.affected_players.add(player.id)
+                if "revealed" not in list(player.status_effects.keys()):
+                    player.status_effects["revealed"] = self.definition.duration
+                self.effect_applied = True
+                
+    def update(self, time_step: float, current_time: float, game_map: Optional[Any], players: List[Any]) -> None:
+        """Update recon state."""
+        super().update(time_step, current_time, game_map, players)
+        
+        if self.is_active and current_time < self.end_time:
+            # Pulse interval
+            interval = self.definition.properties.get('pulse_interval', 1.0)
+            self.pulse_timer += time_step
+            if self.pulse_timer >= interval:
+                self.pulse_timer -= interval
+                self.apply_effect(game_map, players)
+        
+        # If recon is no longer active, remove effects from affected players
+        if not self.is_active:
+            for player_id in self.affected_players:
+                player = self.get_player_by_id(player_id)
+                if player and "revealed" in list(player.status_effects.keys()):
+                    del player.status_effects["revealed"]
+
+# Standard ability definitions
+STANDARD_ABILITIES = {
+    "flash": AbilityDefinition(
+        name="Flash",
+        description="Blinds enemies who look at it",
+        ability_type=AbilityType.FLASH,
+        targeting_type=AbilityTarget.PROJECTILE,
+        max_charges=2,
+        credit_cost=200,
+        cast_time=0.2,
+        duration=1.5,
+        effect_radius=10.0,
+        max_range=30.0,
+        status_effects=["flashed"],
+        instance_class=FlashAbilityInstance,
+        properties={
+            "bounce_count": 1,
+            "activation_delay": 0.2,
+            "projectile_speed": 20.0,
+            "affected_by_gravity": True
+        }
+    ),
+    "smoke": AbilityDefinition(
+        name="Smoke",
+        description="Creates a vision-blocking smoke cloud",
+        ability_type=AbilityType.SMOKE,
+        targeting_type=AbilityTarget.POINT,
+        max_charges=3,
+        credit_cost=100,
+        cast_time=0.5,
+        duration=15.0,
+        effect_radius=5.0,
+        max_range=40.0,
+        blocks_vision=True,
+        status_effects=["smoked"],
+        instance_class=SmokeAbilityInstance,
+        properties={
+            "formation_time": 0.5
+        }
+    ),
+    "molly": AbilityDefinition(
+        name="Molly",
+        description="Creates a damaging area of effect",
+        ability_type=AbilityType.MOLLY,
+        targeting_type=AbilityTarget.PROJECTILE,
+        max_charges=2,
+        credit_cost=200,
+        cast_time=0.2,
+        duration=7.0,
+        effect_radius=5.0,
+        max_range=25.0,
+        damage=8.0,
+        status_effects=["burning"],
+        instance_class=MollyAbilityInstance,
+        properties={
+            "projectile_speed": 15.0,
+            "affected_by_gravity": True,
+            "gravity_strength": 9.8,
+            "can_bounce": True,
+            "bounce_efficiency": 0.6,
+            "max_bounces": 2
+        }
+    ),
+    "recon": AbilityDefinition(
+        name="Recon",
+        description="Reveals enemies in its radius",
+        ability_type=AbilityType.RECON,
+        targeting_type=AbilityTarget.PROJECTILE,
+        max_charges=2,
+        credit_cost=150,
+        cast_time=0.2,
+        duration=8.0,
+        effect_radius=10.0,
+        max_range=35.0,
+        reveals_enemies=True,
+        status_effects=["revealed"],
+        instance_class=ReconAbilityInstance,
+        properties={
+            "pulse_interval": 1.0,
+            "projectile_speed": 25.0,
+            "affected_by_gravity": True
+        }
+    ),
+    "trap": AbilityDefinition(
+        name="Trap",
+        description="Places a trap that reveals enemies",
+        ability_type=AbilityType.TRAP,
+        targeting_type=AbilityTarget.POINT,
+        max_charges=2,
+        credit_cost=200,
+        cast_time=0.5,
+        duration=45.0,
+        effect_radius=3.0,
+        max_range=5.0,
+        reveals_enemies=True,
+        status_effects=["revealed", "vulnerable"],
+        properties={
+            "trigger_radius": 2.0,
+            "arm_time": 1.0
+        }
+    ),
+    "heal": AbilityDefinition(
+        name="Heal",
+        description="Heals allies in radius",
+        ability_type=AbilityType.HEAL,
+        targeting_type=AbilityTarget.AREA,
+        max_charges=1,
+        credit_cost=200,
+        cast_time=0.5,
+        duration=5.0,
+        effect_radius=3.0,
+        healing=5.0,
+        properties={
+            "heal_interval": 1.0
+        }
+    )
+}
 
 # Helper functions to create common ability definitions
 def create_smoke_ability(name: str, radius: float = 5.0, duration: float = 15.0) -> AbilityDefinition:
@@ -333,342 +724,3 @@ def create_heal_ability(name: str, radius: float = 3.0, duration: float = 5.0, h
     )
     ad.instance_class = AreaAbilityInstance
     return ad
-
-@dataclass
-class ProjectileAbilityInstance(AbilityInstance):
-    """Handles abilities that launch a projectile (thrown or shot)."""
-    bounces_remaining: int = 0
-    
-    def __post_init__(self):
-        """Initialize projectile-specific state."""
-        super().__post_init__()
-        self.bounces_remaining = self.definition.properties.get('bounce_count', 0)
-    
-    def tick(self, time_step: float, current_time: float, game_map: Any, players: List[Any]):
-        """Update projectile position and check for collisions."""
-        # Skip if not active or already applied
-        if not self.is_active or self.effect_applied:
-            return
-            
-        # Wait for activation delay
-        if current_time < self.start_time:
-            return
-            
-        # Move projectile
-        if self.velocity3d and self.current_position3d:
-            x, y, z = self.current_position3d
-            vx, vy, vz = self.velocity3d
-            
-            # Apply gravity if needed
-            if self.definition.properties.get('affected_by_gravity', False):
-                g = self.definition.properties.get('gravity_strength', 9.8)
-                vz -= g * time_step
-                self.velocity3d = (vx, vy, vz)
-            
-            # Update position
-            new_x = x + vx * time_step
-            new_y = y + vy * time_step
-            new_z = z + vz * time_step
-            self.current_position3d = (new_x, new_y, new_z)
-            self.trajectory.append(self.current_position3d)
-            
-            # Check collision
-            if game_map:
-                hit_point = game_map.check_collision(
-                    (x, y, z),
-                    (new_x, new_y, new_z)
-                )
-                if hit_point:
-                    # Handle bounce
-                    if self.bounces_remaining > 0:
-                        self.bounces_remaining -= 1
-                        # Simple reflection - could be more sophisticated
-                        self.velocity3d = (-vx, -vy, vz)
-                    else:
-                        # Apply effect at collision point
-                        self.current_position3d = hit_point
-                        self.apply_effect(game_map, players)
-                        self.effect_applied = True
-            
-            # Check max range
-            self.range_traveled += math.sqrt((new_x - x)**2 + (new_y - y)**2 + (new_z - z)**2)
-            if self.range_traveled >= self.definition.max_range:
-                self.apply_effect(game_map, players)
-                self.effect_applied = True
-
-@dataclass
-class AreaAbilityInstance(AbilityInstance):
-    """Handles abilities that apply effects instantly or in an area."""
-    def tick(self, time_step: float, current_time: float, game_map: Any, players: List[Any]):
-        """Apply area effect and maintain it."""
-        # Skip if not active
-        if not self.is_active:
-            return
-            
-        # Wait for formation time
-        if current_time < self.start_time:
-            return
-            
-        # Apply initial effect
-        if not self.effect_applied:
-            self.apply_effect(game_map, players)
-            self.effect_applied = True
-        
-        # Continue applying effect to players in area
-        if self.current_position3d:
-            x, y, z = self.current_position3d
-            for player in players:
-                px, py, pz = player.location
-                dist = math.sqrt((px - x)**2 + (py - y)**2 + (pz - z)**2)
-                if dist <= self.definition.effect_radius:
-                    # Apply continuous effects
-                    if self.definition.damage > 0:
-                        player.apply_damage(int(self.definition.damage * time_step))
-                    if self.definition.healing > 0:
-                        player.health = min(100, player.health + int(self.definition.healing * time_step))
-                    # Add to affected players
-                    self.affected_players.add(player.id)
-                    # Apply status effects
-                    for status in self.definition.status_effects:
-                        if status not in player.status_effects:
-                            player.status_effects.append(status)
-
-@dataclass
-class FlashAbilityInstance(ProjectileAbilityInstance):
-    """Flash ability that blinds players looking at it."""
-    def apply_effect(self, game_map: Any, players: List[Any]):
-        """Apply flash effect to players in range."""
-        if not self.current_position3d:
-            return
-            
-        x, y, z = self.current_position3d
-        affected = False
-        for player in players:
-            px, py, pz = player.location
-            # Check if in range
-            dist = math.sqrt((px - x)**2 + (py - y)**2 + (pz - z)**2)
-            if dist <= self.definition.effect_radius:
-                # Check if player is looking at flash
-                dx = x - px
-                dy = y - py
-                dz = z - pz
-                # Normalize direction to flash
-                length = math.sqrt(dx*dx + dy*dy + dz*dz)
-                if length > 0:
-                    dx, dy, dz = dx/length, dy/length, dz/length
-                    # Get dot product with player view direction
-                    dot = (dx * player.view_direction[0] +
-                          dy * player.view_direction[1] +
-                          dz * player.view_direction[2])
-                    # If player is looking towards flash (dot product > 0)
-                    if dot > 0:
-                        self.affected_players.add(player.id)
-                        if 'flashed' not in player.status_effects:
-                            player.status_effects.append('flashed')
-                        affected = True
-        self.effect_applied = True  # Flash always applies its effect
-
-@dataclass
-class SmokeAbilityInstance(AreaAbilityInstance):
-    """Smoke ability that blocks vision in an area."""
-    def apply_effect(self, game_map: Any, players: List[Any]):
-        """Apply smoke effect to players in range."""
-        if not self.current_position3d:
-            return
-            
-        x, y, z = self.current_position3d
-        affected = False
-        for player in players:
-            px, py, pz = player.location
-            dist = math.sqrt((px - x)**2 + (py - y)**2 + (pz - z)**2)
-            if dist <= self.definition.effect_radius:
-                self.affected_players.add(player.id)
-                if 'smoked' not in player.status_effects:
-                    player.status_effects.append('smoked')
-                affected = True
-        self.effect_applied = affected or self.definition.blocks_vision
-
-@dataclass
-class MollyAbilityInstance(ProjectileAbilityInstance):
-    """Molly ability that creates a damaging area."""
-    def apply_effect(self, game_map: Any, players: List[Any]):
-        """Apply molly damage to players in range."""
-        if not self.current_position3d:
-            return
-            
-        x, y, z = self.current_position3d
-        affected = False
-        for player in players:
-            px, py, pz = player.location
-            dist = math.sqrt((px - x)**2 + (py - y)**2 + (pz - z)**2)
-            if dist <= self.definition.effect_radius:
-                # Apply initial damage
-                damage = int(self.definition.damage)
-                player.apply_damage(damage)
-                # Add burning status
-                if 'burning' not in player.status_effects:
-                    player.status_effects.append('burning')
-                self.affected_players.add(player.id)
-                affected = True
-        self.effect_applied = True  # Molly always applies its effect
-
-    def tick(self, time_step: float, current_time: float, game_map: Any, players: List[Any]):
-        """Update molly and apply damage over time."""
-        # Skip if not active or not yet started
-        if not self.is_active or current_time < self.start_time:
-            return
-            
-        # Apply damage to players in area
-        if self.current_position3d:
-            x, y, z = self.current_position3d
-            for player in players:
-                px, py, pz = player.location
-                dist = math.sqrt((px - x)**2 + (py - y)**2 + (pz - z)**2)
-                if dist <= self.definition.effect_radius:
-                    # Apply damage over time
-                    damage = int(self.definition.damage * time_step)
-                    player.apply_damage(damage)
-                    # Add burning status
-                    if 'burning' not in player.status_effects:
-                        player.status_effects.append('burning')
-                    self.affected_players.add(player.id)
-
-@dataclass
-class ReconAbilityInstance(ProjectileAbilityInstance):
-    """Recon dart that pulses to reveal enemies in its radius periodically."""
-    pulse_timer: float = 0.0
-    def update(self, time_step: float, current_time: float, game_map: Any, players: List[Any]):
-        super().update(time_step, current_time, game_map, players)
-        if self.effect_applied and current_time < self.end_time:
-            # Pulse interval
-            interval = self.definition.properties.get('pulse_interval', 1.0)
-            self.pulse_timer += time_step
-            if self.pulse_timer >= interval:
-                self.pulse_timer -= interval
-                # Reveal all players
-                affected = False
-                for p in players:
-                    if p.id not in self.affected_players:
-                        px, py, pz = p.location
-                        dx = px - self.current_position3d[0]
-                        dy = py - self.current_position3d[1]
-                        if math.sqrt(dx*dx + dy*dy) <= self.definition.effect_radius:
-                            # Mark revealed
-                            p.status_effects.append('revealed')
-                            self.affected_players.add(p.id)
-                            affected = True
-                self.effect_applied = affected
-
-# Standard ability definitions
-STANDARD_ABILITIES = {
-    "flash": AbilityDefinition(
-        name="Flash",
-        description="Blinds enemies who look at it",
-        ability_type=AbilityType.FLASH,
-        targeting_type=AbilityTarget.PROJECTILE,
-        max_charges=2,
-        credit_cost=200,
-        cast_time=0.2,
-        duration=1.5,
-        effect_radius=10.0,
-        max_range=30.0,
-        status_effects=["flashed"],
-        properties={
-            "bounce_count": 1,
-            "activation_delay": 0.2,
-            "projectile_speed": 20.0,
-            "affected_by_gravity": True
-        }
-    ),
-    "smoke": AbilityDefinition(
-        name="Smoke",
-        description="Creates a vision-blocking smoke cloud",
-        ability_type=AbilityType.SMOKE,
-        targeting_type=AbilityTarget.POINT,
-        max_charges=3,
-        credit_cost=100,
-        cast_time=0.5,
-        duration=15.0,
-        effect_radius=5.0,
-        max_range=40.0,
-        blocks_vision=True,
-        status_effects=["smoked"],
-        properties={
-            "formation_time": 0.5
-        }
-    ),
-    "molly": AbilityDefinition(
-        name="Molly",
-        description="Creates a damaging area of effect",
-        ability_type=AbilityType.MOLLY,
-        targeting_type=AbilityTarget.PROJECTILE,
-        max_charges=2,
-        credit_cost=200,
-        cast_time=0.2,
-        duration=7.0,
-        effect_radius=5.0,
-        max_range=25.0,
-        damage=8.0,
-        status_effects=["burning"],
-        properties={
-            "projectile_speed": 15.0,
-            "affected_by_gravity": True,
-            "gravity_strength": 9.8,
-            "can_bounce": True,
-            "bounce_efficiency": 0.6,
-            "max_bounces": 2
-        }
-    ),
-    "recon": AbilityDefinition(
-        name="Recon",
-        description="Reveals enemies in its radius",
-        ability_type=AbilityType.RECON,
-        targeting_type=AbilityTarget.PROJECTILE,
-        max_charges=2,
-        credit_cost=150,
-        cast_time=0.2,
-        duration=8.0,
-        effect_radius=10.0,
-        max_range=35.0,
-        reveals_enemies=True,
-        status_effects=["revealed"],
-        properties={
-            "pulse_interval": 1.0,
-            "projectile_speed": 25.0,
-            "affected_by_gravity": True
-        }
-    ),
-    "trap": AbilityDefinition(
-        name="Trap",
-        description="Places a trap that reveals enemies",
-        ability_type=AbilityType.TRAP,
-        targeting_type=AbilityTarget.POINT,
-        max_charges=2,
-        credit_cost=200,
-        cast_time=0.5,
-        duration=45.0,
-        effect_radius=3.0,
-        max_range=5.0,
-        reveals_enemies=True,
-        status_effects=["revealed", "vulnerable"],
-        properties={
-            "trigger_radius": 2.0,
-            "arm_time": 1.0
-        }
-    ),
-    "heal": AbilityDefinition(
-        name="Heal",
-        description="Heals allies in radius",
-        ability_type=AbilityType.HEAL,
-        targeting_type=AbilityTarget.AREA,
-        max_charges=1,
-        credit_cost=200,
-        cast_time=0.5,
-        duration=5.0,
-        effect_radius=3.0,
-        healing=5.0,
-        properties={
-            "heal_interval": 1.0
-        }
-    )
-}

@@ -9,6 +9,7 @@ from app.simulation.models.map import generate_random_map, Map, MapBoundary
 from app.simulation.ai.agents.base import AgentConfig
 from app.simulation.ai.agents.greedy import GreedyAgent
 from app.simulation.ai.inference.agent_pool import AgentPool
+from app.simulation.models.weapon import WeaponFactory
 from json import load
 
 class DummyAbility:
@@ -23,6 +24,9 @@ def test_full_valorant_game_simulation():
 
     # 2. Create a Map object
     game_map = Map.from_json("/Users/aidankosik/workspace/vct-simulator/maps/ascent.map.json")
+
+    # Get weapon catalog
+    weapon_catalog = WeaponFactory.create_weapon_catalog()
 
     # 3. Create 10 players with random stats
     roles = ["duelist", "controller", "sentinel", "initiator", "duelist"]
@@ -42,6 +46,7 @@ def test_full_valorant_game_simulation():
             clutch_iq=random.uniform(0.5, 1.0),
         )
         player.abilities = DummyAbility()
+        player.secondary = weapon_catalog["Classic"]  # Initialize with proper Classic weapon
         players.append(player)
 
     # 4. Assign 5 to each team
