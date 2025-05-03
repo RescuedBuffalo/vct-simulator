@@ -97,7 +97,6 @@ class TestNavigationMesh:
         
         # Check stairs elevation at multiple points
         bottom_elev = mock_map.nav_mesh.get_elevation(30, 30)
-        print(f"[DEBUG] Stair bottom elevation: {mock_map.stairs['test_stairs'].get_elevation_at_point(30, 30)}")
         middle_elev = mock_map.nav_mesh.get_elevation(30, 32)
         top_elev = mock_map.nav_mesh.get_elevation(30, 34)
         
