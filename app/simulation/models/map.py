@@ -594,33 +594,34 @@ class Map:
     
         return game_map
 
-    def create_navigation_mesh(self) -> NavigationMesh:
+    @classmethod
+    def create_navigation_mesh(cls, game_map) -> NavigationMesh:
         """Create a navigation mesh for this map."""
-        nav_mesh = NavigationMesh(self.width, self.height)
+        nav_mesh = NavigationMesh(game_map.width, game_map.height)
         
         # Add walls as obstacles
-        for wall in self.walls.values():
+        for wall in game_map.walls.values():
             nav_mesh.add_obstacle(
                 wall.x, wall.y, wall.width, wall.height,
                 wall.z, wall.height_z
             )
         
         # Add objects as obstacles
-        for obj in self.objects.values():
+        for obj in game_map.objects.values():
             nav_mesh.add_obstacle(
                 obj.x, obj.y, obj.width, obj.height,
                 obj.z, obj.height_z
             )
         
         # Set area elevations
-        for area in self.areas.values():
+        for area in game_map.areas.values():
             nav_mesh.set_elevation(
                 area.x, area.y, area.width, area.height,
                 area.elevation
             )
         
         # Set stairs elevations
-        for stair in self.stairs.values():
+        for stair in game_map.stairs.values():
             nav_mesh.set_stairs_elevation(
                 stair.x, stair.y, stair.width, stair.height,
                 stair.z, stair.z + stair.height_z,

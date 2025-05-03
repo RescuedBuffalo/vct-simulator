@@ -29,14 +29,19 @@ async def root():
 async def create_match(request: CreateMatchRequest):
     """Create a new match with specified teams and map."""
     try:
+        print(f"[DEBUG] Creating match with data: {request}")
         match_id = game_manager.create_match(
             team_a=request.team_a,
             team_b=request.team_b,
             map_name=request.map_name,
             agent_assignments=request.agent_assignments
         )
+        print(f"[DEBUG] Match created successfully with ID: {match_id}")
         return {"match_id": match_id, "status": "created"}
     except Exception as e:
+        import traceback
+        print(f"[DEBUG] Error creating match: {str(e)}")
+        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/matches/{match_id}", response_model=MatchStateResponse)

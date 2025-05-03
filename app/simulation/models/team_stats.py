@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Set, Tuple, Any
 import statistics
 from .player_stats import PlayerMatchStats
 import math
+import os
 
 
 @dataclass
@@ -425,8 +426,10 @@ class EnhancedTeamStats:
         }
 
         if write_to_file:
+            summaries_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "summaries")
+            os.makedirs(summaries_dir, exist_ok=True)
             import json
-            with open(f"../summaries/team_stats_{self.team_name}.json", "w") as f:
+            with open(os.path.join(summaries_dir, f"team_stats_{self.team_name}.json"), "w") as f:
                 json.dump(summary, f)
 
         return summary

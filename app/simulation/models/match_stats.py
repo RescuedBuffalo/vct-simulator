@@ -4,6 +4,7 @@ import statistics
 from .player_stats import PlayerMatchStats
 from .team_stats import EnhancedTeamStats
 from datetime import datetime, timedelta
+import os
 
 
 @dataclass
@@ -681,7 +682,9 @@ class MatchStats:
 
         if write_to_file:
             import json
-            with open(f"../summaries/match_stats_{self.map_name}.json", "w") as f:
+            summaries_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "summaries")
+            os.makedirs(summaries_dir, exist_ok=True)
+            with open(os.path.join(summaries_dir, f"match_stats_{self.map_name}.json"), "w") as f:
                 json.dump(summary, f)
 
         return summary
@@ -833,7 +836,10 @@ class MatchStats:
 
         if write_to_file:
             import json
-            with open(f"summaries/match_stats_{self.map_name}.json", "w") as f:
+            import os
+            summaries_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "summaries")
+            os.makedirs(summaries_dir, exist_ok=True)
+            with open(os.path.join(summaries_dir, f"match_stats_{self.map_name}.json"), "w") as f:
                 json.dump(self.get_summary(write_to_file=True), f)
 
         return {

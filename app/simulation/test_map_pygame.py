@@ -10,7 +10,8 @@ from app.simulation.models.map import visualize_map_with_pygame, Map
 def test_map_collision():
     """Test the collision detection in the Map class."""
     # Load the map
-    game_map = Map.from_json("maps/ascent.map.json")
+    map_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "maps", "ascent.map.json")
+    game_map = Map.from_json(map_path)
     
     # Test some positions
     test_positions = [
@@ -49,7 +50,7 @@ def test_map_collision():
     print("-" * 50)
     
     for sx, sy, ex, ey, expected, desc in test_movements:
-        result = game_map.can_move(sx, sy, ex, ey)
+        result = game_map.can_move(sx, sy, 0.0, ex, ey, 0.0)
         status = "PASS" if result == expected else "FAIL"
         start_area = game_map.get_area_at_position(sx, sy) or "None"
         end_area = game_map.get_area_at_position(ex, ey) or "None"

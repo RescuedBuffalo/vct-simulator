@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
 
 class TeamInfo(BaseModel):
@@ -71,13 +71,13 @@ class RoundResponse(BaseModel):
     round_number: int
     winner: str
     end_condition: str
-    round_summary: Dict[str, any]
+    round_summary: Dict[str, Any]
 
 class RoundStateResponse(BaseModel):
     """Response model for round state."""
     round_number: int
     state: RoundState
-    events: List[Dict[str, any]]
+    events: List[Dict[str, Any]]
 
 class AssignAgentRequest(BaseModel):
     """Request model for assigning an agent to a player."""
@@ -101,6 +101,6 @@ class MatchStatsResponse(BaseModel):
     duration: float
     team_a_score: int
     team_b_score: int
-    rounds: List[Dict[str, any]]
-    player_stats: Dict[str, Dict[str, any]]
-    team_stats: Dict[str, Dict[str, any]] 
+    rounds: List[Dict[str, Any]]
+    player_stats: Dict[str, Dict[str, Any]]
+    team_stats: Dict[str, Dict[str, Any]] 

@@ -1,27 +1,27 @@
 from __future__ import annotations
 from enum import Enum
-from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING, Set
 import random
 import math
 import time as time_module
 
 from app.simulation.models.player import Player
-from app.simulation.models.blackboard import Blackboard
+from app.simulation.models.blackboard import Blackboard, EconomyInfo
 from app.simulation.models.ability import AbilityInstance
 from app.simulation.models.map_pathfinding import PathFinder, CollisionDetector
 from app.simulation.models.weapon import Weapon, WeaponFactory
 # Import Map for typing but avoid circular imports
 if TYPE_CHECKING:
-    from app.simulation.models.map import Map
+    from app.simulation.models.map import Map, MapArea
 
 # Constants
-ROUND_TIMER = 100  # seconds
-BUY_PHASE_TIMER = 20  # seconds
-FIRST_ROUND_BUY_PHASE_TIMER = 30  # seconds
-SPIKE_TIMER = 45  # seconds
-DEFUSE_TIME = 7  # seconds
-PLANT_TIME = 4  # seconds
+ROUND_TIMER = 100.0  # seconds
+BUY_PHASE_TIMER = 30.0  # seconds
+FIRST_ROUND_BUY_PHASE_TIMER = 45.0  # seconds
+SPIKE_TIMER = 45.0  # seconds
+DEFUSE_TIME = 7.0  # seconds
+PLANT_TIME = 4.0  # seconds
 
 # Combat constants
 HALF_DEFUSE_TIME = 3.5  # seconds for half defuse
@@ -80,11 +80,11 @@ class DroppedShield:
 
 @dataclass
 class InfoEvent:
-    """Information gathered by players."""
-    type: str  # "spot", "sound", "damage", "ability"
+    """Represents an information event like spotting an enemy."""
+    type: str
     source_id: str
-    target_id: Optional[str]
-    position: Tuple[float, float]
+    target_id: str
+    position: Tuple[float, float, float]
     time: float
     info: Dict
 
@@ -120,8 +120,8 @@ class RoundResult:
             "spike_time_remaining": self.spike_time_remaining,
             "alive_attackers": self.alive_attackers,
             "alive_defenders": self.alive_defenders,
-            "winner": self.winner,
-            "end_condition": self.end_condition,
+            "winner": self.winner.value if self.winner else RoundWinner.NONE.value,
+            "end_condition": self.end_condition.value if self.end_condition else None,
             "kill_count": self.kill_count
         }
 
@@ -152,101 +152,112 @@ class Round:
         loss_bonus_defenders: int = 1900,
         map_obj: Map = None,
     ):
-        """
-        Initialize a new round simulation.
-        
-        Args:
-            round_number: The round number in the match
-            players: Dictionary of players by ID
-            attacker_ids: List of IDs for attacking team players
-            defender_ids: List of IDs for defending team players
-            map_data: Legacy map data dictionary (will be used to create a Map object if map_obj not provided)
-            attacker_blackboard: Blackboard for attacker team or None to create a new one
-            defender_blackboard: Blackboard for defender team or None to create a new one
-            seed: Random seed for deterministic simulation
-            loss_bonus_attackers: Economy bonus for attackers if they lost previous round
-            loss_bonus_defenders: Economy bonus for defenders if they lost previous round
-            map_obj: Map object to use (preferred over map_data if provided)
-        """
+        """Initialize the round."""
         self.round_number = round_number
         self.players = players
+        
+        # Set player teams and reset player state
+        for player_id in players:
+            player = players[player_id]
+            if player_id in attacker_ids:
+                player.team_id = "attackers"
+            elif player_id in defender_ids:
+                player.team_id = "defenders"
+        
         self.attacker_ids = attacker_ids
         self.defender_ids = defender_ids
-        self.map_data = map_data  # Store map_data for backward compatibility
-        self.map = map_obj
-
-        # Initialize or use provided blackboards for each team
-        self.attacker_blackboard = attacker_blackboard if attacker_blackboard else Blackboard("attackers")
-        self.defender_blackboard = defender_blackboard if defender_blackboard else Blackboard("defenders")
         
-        # Set attacking/defending status in blackboards
-        self.attacker_blackboard.set("is_attacking", True)
-        self.defender_blackboard.set("is_attacking", False)
+        # Setup blackboards
+        if attacker_blackboard:
+            self.attacker_blackboard = attacker_blackboard
+        else:
+            self.attacker_blackboard = Blackboard("attackers")
         
-        # Update current round in blackboards
-        self.attacker_blackboard.set("current_round", round_number)
-        self.defender_blackboard.set("current_round", round_number)
+        if defender_blackboard:
+            self.defender_blackboard = defender_blackboard
+        else:
+            self.defender_blackboard = Blackboard("defenders")
         
-        # Set random seed for deterministic simulation if provided
-        if seed is not None:
-            random.seed(seed)
-            
-        # Round state
-        self.phase = RoundPhase.BUY
-        self.tick = 0.0  # simulation time in seconds
+        # Initialize team stats in blackboards
+        self.attacker_blackboard.data["is_attacking"] = True
+        self.defender_blackboard.data["is_attacking"] = False
+        self.attacker_blackboard.data["current_round"] = round_number
+        self.defender_blackboard.data["current_round"] = round_number
+        
+        # Initialize alive players in blackboards
+        alive_attackers = {player_id for player_id in attacker_ids if players[player_id].alive}
+        alive_defenders = {player_id for player_id in defender_ids if players[player_id].alive}
+        self.attacker_blackboard.data["alive_players"] = alive_attackers
+        self.defender_blackboard.data["alive_players"] = alive_defenders
+        
+        # Initialize economy in blackboards
+        self.attacker_blackboard.data["economy"] = EconomyInfo()
+        self.defender_blackboard.data["economy"] = EconomyInfo()
+        
+        # Store the map data for compatibility with Match class
+        self.map_data = map_data if map_data is not None else {}
+        
+        # Store the map object or load from map_data
+        if map_obj:
+            self.map = map_obj
+        else:
+            # Load map from map_data
+            self.map = Map.from_json(map_data)
+                
         self.round_winner = RoundWinner.NONE
         self.round_end_condition = None
-        self.spike_planted = False
-        self.spike_carrier_id = None
-        self.spike_plant_time = None
-        self.spike_position = None
         
-        # Timers
-        self.round_time_remaining = ROUND_TIMER
-        self.buy_phase_time = FIRST_ROUND_BUY_PHASE_TIMER if round_number == 1 else BUY_PHASE_TIMER
-        self.spike_time_remaining = None
-        
-        # Events
-        self.deaths: List[DeathEvent] = []
-        self.dropped_weapons: List[DroppedWeapon] = []
-        self.dropped_shields: List[DroppedShield] = []
-        self.active_abilities: List[AbilityInstance] = []
-        self.info_events: List[InfoEvent] = []
-        self.comms: List[CommEvent] = []
-        
-        # Initialize blackboards with alive players
-        self._update_alive_players_in_blackboards()
-        
-        # Spike assignment
-        self._assign_spike()
-        
-        # Initialize player positions
-        self._initialize_player_positions()
-        
-        # Initialize round strategies for both teams
-        self._set_initial_strategies()
-        
+        # Economy settings
         self.loss_bonus_attackers = loss_bonus_attackers
         self.loss_bonus_defenders = loss_bonus_defenders
         
-        # Enhanced event tracking for statistics
-        self._death_events: List[DeathEvent] = []
-        self._plant_events: List[Dict] = []
-        self._defuse_events: List[Dict] = []
-        self._damage_events: List[Dict] = []
-        self._utility_events: List[Dict] = []
-        self._purchase_events: List[Dict] = []
-        self.kill_count = 0
-        self.print_kills = False
-        self.tick_logs = []  # Per-tick RL logs: list of dicts (obs, action, reward, done)
+        # Random seed for reproducibility if specified
+        if seed is not None:
+            random.seed(seed)
+        
+        # Round status
+        self.phase = RoundPhase.BUY
+        self.buy_phase_time = BUY_PHASE_TIMER
+        self.round_time_remaining = ROUND_TIMER
+        self.tick = 0.0  # Time elapsed in the round
+        
+        # Spike status
+        self.spike_planted = False
+        self.spike_plant_time = None  # When was the spike planted
+        self.spike_time_remaining = None  # Time until spike detonates
+        self.spike_position = None  # Location of planted spike
+        
+        # Track events for statistics and replay
+        self._death_events = []  # DeathEvent objects
+        self._damage_events = []  # List of damage events
+        self._info_events = []  # InfoEvent objects
+        self._comm_events = []  # CommEvent objects
+        self._purchase_events = []  # Purchase events
+        self._plant_events = []  # Spike plant events
+        self._defuse_events = []  # Spike defuse events
+        self._utility_events = []  # Utility usage events
+        self.comms = []  # Communication events list
+        self.active_abilities = []  # Active abilities list
+        self.tick_logs = []  # RL tick logs
+        self.print_kills = False  # Whether to print kill messages
+        self.kill_count = 0  # Counter for number of kills
+        
+        # Dropped weapons/shields
+        self.dropped_weapons = []  # DroppedWeapon objects
+        self.dropped_shields = []  # DroppedShield objects
+        
+        # Round setup
+        self._set_initial_strategies()
+        self._assign_spike()
+        self._initialize_player_positions()
     
     def _update_alive_players_in_blackboards(self) -> None:
-        """Update the blackboards with currently alive players."""
-        attacker_alive = set(pid for pid in self.attacker_ids if self.players[pid].alive)
-        defender_alive = set(pid for pid in self.defender_ids if self.players[pid].alive)
+        """Update the alive_players sets in both blackboards."""
+        alive_attackers = {player_id for player_id in self.attacker_ids if self.players[player_id].alive}
+        alive_defenders = {player_id for player_id in self.defender_ids if self.players[player_id].alive}
         
-        self.attacker_blackboard.set("alive_players", attacker_alive)
-        self.defender_blackboard.set("alive_players", defender_alive)
+        self.attacker_blackboard.data["alive_players"] = alive_attackers
+        self.defender_blackboard.data["alive_players"] = alive_defenders
     
     def _set_initial_strategies(self) -> None:
         """Set initial strategies for both teams based on blackboard data and round state."""
@@ -368,23 +379,37 @@ class Round:
         """Handle buy phase logic."""
         self.buy_phase_time -= time_step
         
-        # Simulate players buying
+        # Ensure alive_players is properly updated before buy decisions
+        self._update_alive_players_in_blackboards()
+        
+        # Simulate players buying immediately, but keep in buy phase until timer expires
         if self.buy_phase_time <= 0:
             # Buy phase is over, transition to round phase
             self.phase = RoundPhase.ROUND
             self.round_time_remaining = ROUND_TIMER
-            
-            # Simulate buying decisions for all players
+        else:
+            # Still in buy phase, but simulate buying decisions for all players
+            # This ensures players have equipment even when inspecting round state during buy phase
             for player_id, player in self.players.items():
-                self._simulate_buy_decision(player)
+                if not hasattr(player, "_buy_simulated"):
+                    self._simulate_buy_decision(player)
+                    player._buy_simulated = True
     
     def _simulate_buy_decision(self, player: Player) -> None:
         """Simulate a player's buy decision based on credits available and team economy."""
+        print(f"[DEBUG] _simulate_buy_decision for player {player.id} with {player.creds} credits")
+        
         # Get team blackboard for this player
         team_blackboard = self.attacker_blackboard if player.id in self.attacker_ids else self.defender_blackboard
         
         # Update economy info in blackboard
         economy = team_blackboard.get("economy")
+        if economy is None:
+            print(f"[DEBUG] economy is None, creating new EconomyInfo for player {player.id}")
+            economy = EconomyInfo()
+            team_blackboard.set("economy", economy)
+        
+        print(f"[DEBUG] Adding {player.creds} credits to team economy for player {player.id}")
         economy.team_credits += player.creds
 
         # Get weapon catalog
@@ -392,30 +417,40 @@ class Round:
         
         # Basic buy logic - can be expanded based on economy and team strategy
         if player.creds >= 3900:  # Full buy threshold
+            print(f"[DEBUG] Player {player.id} has enough credits for a full buy")
             # Buy rifle, heavy shield, and abilities
             player.weapon = weapon_catalog["Vandal"] if random.random() < 0.5 else weapon_catalog["Phantom"]
             player.shield = "heavy"
-            player.creds -= 3900
+            print(f"[DEBUG] Assigned shield={player.shield} to player {player.id}")
+            player.creds -= 2900  # Rifle cost
+            player.creds -= 1000  # Heavy shield cost
             economy.can_full_buy = True
         elif player.creds >= 2400:  # Light buy threshold
+            print(f"[DEBUG] Player {player.id} has enough credits for a light buy")
             # Buy SMG or shotgun and light shield
             player.weapon = weapon_catalog["Spectre"] if random.random() < 0.7 else weapon_catalog["Bulldog"]
             player.shield = "light"
-            player.creds -= 2400
+            print(f"[DEBUG] Assigned shield={player.shield} to player {player.id}")
+            player.creds -= 1600  # SMG cost (approximation)
+            player.creds -= 400   # Light shield cost
             economy.can_half_buy = True
         elif player.creds >= 950:  # Eco round
+            print(f"[DEBUG] Player {player.id} has enough credits for a pistol round")
             # Buy pistol and maybe light shield
             player.weapon = weapon_catalog["Sheriff"] if random.random() < 0.6 else weapon_catalog["Ghost"]
             if player.creds >= 1400:
                 player.shield = "light"
-                player.creds -= 450
-            player.creds -= 950
+                print(f"[DEBUG] Assigned shield={player.shield} to player {player.id}")
+                player.creds -= 400  # Light shield cost
+            player.creds -= 800  # Pistol cost (approximation)
         else:
+            print(f"[DEBUG] Player {player.id} doesn't have enough credits for a buy")
             # Very low economy - consider saving
             economy.saving = True
 
         # Update average credits after purchases
         alive_player_count = len(team_blackboard.get("alive_players"))
+        print(f"[DEBUG] alive_player_count={alive_player_count} for player {player.id}")
         if alive_player_count > 0:
             all_creds = [self.players[pid].creds for pid in team_blackboard.get("alive_players")]
             economy.avg_credits = sum(all_creds) / alive_player_count
@@ -423,8 +458,15 @@ class Round:
         # Track purchase events for statistics
         if player.weapon:
             item_cost = player.weapon.cost
-            item_type = "shield" if player.shield == "heavy" or player.shield == "light" else f"weapon_{player.weapon.name}"
+            item_type = f"weapon_{player.weapon.name}"
             self._log_purchase_event(player.id, item_type, item_cost)
+        
+        if player.shield:
+            item_cost = 1000 if player.shield == "heavy" else 400
+            item_type = f"shield_{player.shield}"
+            self._log_purchase_event(player.id, item_type, item_cost)
+        
+        print(f"[DEBUG] After buy, player {player.id} has: weapon={player.weapon}, shield={player.shield}, creds={player.creds}")
     
     def _process_round_phase(self, time_step: float) -> None:
         """Handle round phase logic."""
@@ -1035,94 +1077,40 @@ class Round:
             target_pos = self._get_player_target_position(player_id)
             
             if target_pos:
-                # Find path using A* pathfinding
-                path = self.map.pathfinder.find_path(
-                    start=current_pos,
-                    goal=target_pos
-                )
-                
-                if path:
-                    # Get next waypoint
-                    next_pos = path[1] if len(path) > 1 else path[0]
+                # Check if pathfinder is available
+                if hasattr(self.map, 'pathfinder') and self.map.pathfinder is not None:
+                    # Find path using A* pathfinding
+                    path = self.map.pathfinder.find_path(
+                        start=current_pos,
+                        goal=target_pos
+                    )
                     
-                    # Calculate movement direction to next waypoint
-                    direction = self._direction_to_target(current_pos, next_pos)
-                    
-                    # Check for collisions before moving
-                    if not self.map.collision_detector.check_collision(
-                        current_pos, next_pos
-                    ):
-                        player.set_movement_input(direction)
-                    else:
-                        # Find alternative path or wait
-                        player.set_movement_input((0, 0))
-    
-    def _simulate_player_movements(self, time_step: float) -> None:
-        """Simulate all player movements based on current inputs and game state."""
-        # For each player, calculate movement direction based on their goals
-        # and use the new physics-based movement system
-        
-        # Create a Map object from map_data for collision detection
-        game_map = self._get_map_collision_data()
-        
-        for player_id, player in self.players.items():
-            if not player.alive:
-                continue
-                
-            # Skip movement if planting or defusing
-            if player.is_planting or player.is_defusing:
-                player.set_movement_input((0, 0))  # Stop movement
-                continue
+                    if path:
+                        # Get next waypoint
+                        next_pos = path[1] if len(path) > 1 else path[0]
+                        
+                        # Calculate movement direction to next waypoint
+                        direction = self._direction_to_target(current_pos, next_pos)
+                        
+                        # Check for collisions before moving if collision_detector exists
+                        if hasattr(self.map, 'collision_detector') and self.map.collision_detector is not None:
+                            if not self.map.collision_detector.check_collision(
+                                current_pos, next_pos
+                            ):
+                                player.set_movement_input(direction)
+                            else:
+                                # Find alternative path or wait
+                                player.set_movement_input((0, 0))
+                        else:
+                            # No collision detector, just set the movement
+                            player.set_movement_input(direction)
+                else:
+                    # No pathfinder, use direct movement toward target
+                    direction = self._direction_to_target(current_pos, target_pos)
+                    player.set_movement_input(direction)
             
-            # Determine desired movement direction based on team, strategy, etc.
-            movement_dir = self._get_desired_movement_direction(player_id)
-            
-            # Set player's movement input
-            is_walking = random.random() < 0.3  # Simulate walk intent (shift key)
-            is_crouching = random.random() < 0.1  # Simulate crouch intent (ctrl key)
-            
-            # Decide if AI should jump (occasionally jump when encountering obstacles or stairs)
-            is_jumping = False
-            
-            # Check if player needs to jump to get over obstacles
-            current_x, current_y = player.location[:2]
-            desired_x = current_x + movement_dir[0]
-            desired_y = current_y + movement_dir[1]
-            
-            # Check for elevation differences that might require jumping
-            current_elevation = game_map.get_elevation_at_position(current_x, current_y)
-            target_elevation = game_map.get_elevation_at_position(desired_x, desired_y)
-            
-            # If there's a significant elevation difference, consider jumping
-            elevation_difference = target_elevation - current_elevation
-            if elevation_difference > 0.3 and elevation_difference < 1.5:
-                # Try to jump over small obstacles or up stairs
-                is_jumping = random.random() < 0.7  # 70% chance to try jumping
-            
-            # Also randomly jump sometimes (for pathing variations)
-            elif random.random() < 0.02 and player.is_on_ground():  # 2% chance to jump randomly
-                is_jumping = True
-            
-            # Set player's movement input with jump decision
-            player.set_movement_input(movement_dir, is_walking, is_crouching, is_jumping)
-            
-            # Update player movement using physics system
-            player.update_movement(time_step, game_map)
-            
-            # Weapon pickup logic: only allowed during round phase (not buy phase)
-            if self.phase == RoundPhase.ROUND:
-                self._attempt_pickup_weapon(player)
-                self._attempt_pickup_shield(player)
-            
-            # Check if player has fallen outside map bounds (safety check)
-            if player.z_position < -10.0:  # If player has fallen far below the map
-                # Reset player to a safe position
-                safe_pos = self._find_safe_position_for_player(player_id)
-                if safe_pos:
-                    player.location = (safe_pos[0], safe_pos[1])
-                    player.z_position = safe_pos[2]
-                    player.velocity = (0.0, 0.0)
-                    player.z_velocity = 0.0
+            # Check for weapon pickups
+            self._attempt_pickup_weapon(player)
     
     def _attempt_pickup_weapon(self, player):
         """Allow a player to pick up a dropped weapon if close enough and doesn't already have one (or swaps)."""
@@ -1171,6 +1159,19 @@ class Round:
         
         # Try to use team-appropriate spawn
         if self.map:
+            # Ensure the map has the required attributes for pathfinding
+            if not hasattr(self.map, 'nav_mesh') or self.map.nav_mesh is None:
+                from app.simulation.models.map_pathfinding import NavigationMesh
+                self.map.nav_mesh = NavigationMesh(self.map.width, self.map.height)
+                
+            if not hasattr(self.map, 'pathfinder') or self.map.pathfinder is None:
+                from app.simulation.models.map_pathfinding import PathFinder
+                self.map.pathfinder = PathFinder(self.map.nav_mesh)
+                
+            if not hasattr(self.map, 'collision_detector') or self.map.collision_detector is None:
+                from app.simulation.models.map_pathfinding import CollisionDetector
+                self.map.collision_detector = CollisionDetector(self.map.nav_mesh)
+            
             if is_attacker and self.map.attacker_spawns:
                 spawn = random.choice(self.map.attacker_spawns)
             elif not is_attacker and self.map.defender_spawns:
@@ -1496,7 +1497,7 @@ class Round:
                   (" (headshot)" if is_headshot else ""))
 
     def _log_info_event(
-        self, source_id: str, target_id: str, position: Tuple[float, float], 
+        self, source_id: str, target_id: str, position: Tuple[float, float],
         event_type: str, info: Dict
     ) -> None:
         """Log an information event."""
@@ -1508,8 +1509,7 @@ class Round:
             time=self.tick,
             info=info
         )
-        
-        self.info_events.append(event)
+        self._info_events.append(event)
     
     def _log_comm_event(self, sender_id: str, message: str) -> None:
         """Log a team communication event."""
@@ -1603,6 +1603,10 @@ class Round:
         self, player_id: str, item_type: str, cost: int
     ) -> None:
         """Log a purchase event for statistics tracking."""
+        # Check if _purchase_events exists, and create it if not
+        if not hasattr(self, "_purchase_events"):
+            self._purchase_events = []
+            
         # Create and store the purchase event
         event = {
             "player_id": player_id,
@@ -1627,8 +1631,8 @@ class Round:
     
     def get_round_summary(self) -> RoundResult:
         """Get a summary of the round's current state."""
-        alive_attackers = len(self.get_alive_players("attackers"))
-        alive_defenders = len(self.get_alive_players("defenders"))
+        alive_attackers = sum(1 for pid in self.attacker_ids if self.players[pid].alive)
+        alive_defenders = sum(1 for pid in self.defender_ids if self.players[pid].alive)
         
         summary = {
             "round_number": self.round_number,
@@ -1651,6 +1655,11 @@ class Round:
             if not player.alive:
                 continue
                 
+            # Check if player has abilities attribute
+            if not hasattr(player, 'abilities'):
+                # Skip players without abilities
+                continue
+                
             # Get available abilities
             available_abilities = player.abilities.get_available_abilities()
             
@@ -1661,6 +1670,12 @@ class Round:
 
     def _should_use_ability(self, player_id: str, ability: AbilityInstance) -> bool:
         """Decide if player should use an ability based on situation."""
+        player = self.players[player_id]
+        
+        # Check if player has abilities attribute
+        if not hasattr(player, 'abilities'):
+            return False
+        
         # This would be a complex decision based on many factors:
         # - Current strategy
         # - Known enemy positions
@@ -1674,7 +1689,15 @@ class Round:
     def _use_ability(self, player_id: str, ability_name: str, target_location: Tuple[float, float], charge_time: float = 0.0) -> None:
         """Handle ability usage with proper mechanics."""
         player = self.players[player_id]
-        if not player.alive or ability_name not in player.abilities:
+        if not player.alive:
+            return
+            
+        # Check if player has abilities attribute
+        if not hasattr(player, 'abilities'):
+            return
+            
+        # Check if ability exists
+        if ability_name not in player.abilities:
             return
             
         # Check if ability has clear path to target
@@ -1882,3 +1905,89 @@ class Round:
                 'reward': reward,
                 'done': done
             })
+
+    def _get_player_target_position(self, player_id: str) -> Tuple[float, float, float]:
+        """Get the target position for a player based on their current objective."""
+        player = self.players[player_id]
+        is_attacker = player_id in self.attacker_ids
+        
+        # Default to current position
+        current_pos = player.location
+        if len(current_pos) == 2:
+            current_pos = (current_pos[0], current_pos[1], 0.0)
+        
+        # If in buy phase, stay at spawn
+        if self.phase == RoundPhase.BUY:
+            return current_pos
+            
+        # If planting or defusing, stay put
+        if player.is_planting or player.is_defusing:
+            return current_pos
+            
+        # Initialize target position with current position
+        target_pos = current_pos
+        
+        if self.phase == RoundPhase.ROUND:
+            if is_attacker:
+                # Attackers logic
+                if not self.spike_planted:
+                    # Try to move to a bomb site
+                    site_positions = self._get_plant_site_positions()
+                    if site_positions:
+                        # Get target site from team strategy if available
+                        team_blackboard = self.attacker_blackboard
+                        strategy = team_blackboard.get("current_strategy")
+                        target_site = None
+                        
+                        if strategy and hasattr(strategy, 'target_site') and strategy.target_site:
+                            target_site = strategy.target_site
+                        else:
+                            # Random site if no strategy
+                            target_site = random.choice(list(site_positions.keys()))
+                        
+                        if target_site in site_positions:
+                            site_pos = site_positions[target_site]
+                            target_pos = (site_pos[0], site_pos[1], 0.0)
+                else:
+                    # After plant, defend the spike
+                    spike_pos = self._get_spike_position()
+                    if spike_pos:
+                        # Move near spike but not too close
+                        dist_to_spike = self._calculate_distance(player.location, spike_pos)
+                        if dist_to_spike > 8.0:  # Stay within reasonable distance
+                            target_pos = (spike_pos[0], spike_pos[1], 0.0)
+                        elif dist_to_spike < 3.0:  # Too close, back up
+                            # Move away from spike slightly
+                            direction = self._direction_to_target(spike_pos, player.location)
+                            target_pos = (
+                                player.location[0] + direction[0] * 3.0,
+                                player.location[1] + direction[1] * 3.0,
+                                0.0
+                            )
+            else:
+                # Defenders logic
+                if not self.spike_planted:
+                    # Defend sites
+                    site_positions = self._get_plant_site_positions()
+                    if site_positions:
+                        # Assign defenders to sites based on index
+                        site_keys = list(site_positions.keys())
+                        defender_idx = self.defender_ids.index(player_id) if player_id in self.defender_ids else 0
+                        assigned_site = site_keys[defender_idx % len(site_keys)]
+                        site_pos = site_positions[assigned_site]
+                        
+                        # Only move if not already at site
+                        dist_to_site = self._calculate_distance(player.location, site_pos)
+                        if dist_to_site > 5.0:
+                            target_pos = (site_pos[0], site_pos[1], 0.0)
+                else:
+                    # After plant, move toward spike
+                    spike_pos = self._get_spike_position()
+                    if spike_pos:
+                        target_pos = (spike_pos[0], spike_pos[1], 0.0)
+        
+        # Ensure we have a 3D position
+        if len(target_pos) == 2:
+            target_pos = (target_pos[0], target_pos[1], 0.0)
+            
+        return target_pos
