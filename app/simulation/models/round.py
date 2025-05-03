@@ -397,7 +397,6 @@ class Round:
     
     def _simulate_buy_decision(self, player: Player) -> None:
         """Simulate a player's buy decision based on credits available and team economy."""
-        print(f"[DEBUG] _simulate_buy_decision for player {player.id} with {player.creds} credits")
         
         # Get team blackboard for this player
         team_blackboard = self.attacker_blackboard if player.id in self.attacker_ids else self.defender_blackboard
@@ -405,11 +404,9 @@ class Round:
         # Update economy info in blackboard
         economy = team_blackboard.get("economy")
         if economy is None:
-            print(f"[DEBUG] economy is None, creating new EconomyInfo for player {player.id}")
             economy = EconomyInfo()
             team_blackboard.set("economy", economy)
         
-        print(f"[DEBUG] Adding {player.creds} credits to team economy for player {player.id}")
         economy.team_credits += player.creds
 
         # Get weapon catalog
@@ -417,40 +414,32 @@ class Round:
         
         # Basic buy logic - can be expanded based on economy and team strategy
         if player.creds >= 3900:  # Full buy threshold
-            print(f"[DEBUG] Player {player.id} has enough credits for a full buy")
             # Buy rifle, heavy shield, and abilities
             player.weapon = weapon_catalog["Vandal"] if random.random() < 0.5 else weapon_catalog["Phantom"]
             player.shield = "heavy"
-            print(f"[DEBUG] Assigned shield={player.shield} to player {player.id}")
             player.creds -= 2900  # Rifle cost
             player.creds -= 1000  # Heavy shield cost
             economy.can_full_buy = True
         elif player.creds >= 2400:  # Light buy threshold
-            print(f"[DEBUG] Player {player.id} has enough credits for a light buy")
             # Buy SMG or shotgun and light shield
             player.weapon = weapon_catalog["Spectre"] if random.random() < 0.7 else weapon_catalog["Bulldog"]
             player.shield = "light"
-            print(f"[DEBUG] Assigned shield={player.shield} to player {player.id}")
             player.creds -= 1600  # SMG cost (approximation)
             player.creds -= 400   # Light shield cost
             economy.can_half_buy = True
         elif player.creds >= 950:  # Eco round
-            print(f"[DEBUG] Player {player.id} has enough credits for a pistol round")
             # Buy pistol and maybe light shield
             player.weapon = weapon_catalog["Sheriff"] if random.random() < 0.6 else weapon_catalog["Ghost"]
             if player.creds >= 1400:
                 player.shield = "light"
-                print(f"[DEBUG] Assigned shield={player.shield} to player {player.id}")
                 player.creds -= 400  # Light shield cost
             player.creds -= 800  # Pistol cost (approximation)
         else:
-            print(f"[DEBUG] Player {player.id} doesn't have enough credits for a buy")
             # Very low economy - consider saving
             economy.saving = True
 
         # Update average credits after purchases
         alive_player_count = len(team_blackboard.get("alive_players"))
-        print(f"[DEBUG] alive_player_count={alive_player_count} for player {player.id}")
         if alive_player_count > 0:
             all_creds = [self.players[pid].creds for pid in team_blackboard.get("alive_players")]
             economy.avg_credits = sum(all_creds) / alive_player_count
@@ -465,8 +454,6 @@ class Round:
             item_cost = 1000 if player.shield == "heavy" else 400
             item_type = f"shield_{player.shield}"
             self._log_purchase_event(player.id, item_type, item_cost)
-        
-        print(f"[DEBUG] After buy, player {player.id} has: weapon={player.weapon}, shield={player.shield}, creds={player.creds}")
     
     def _process_round_phase(self, time_step: float) -> None:
         """Handle round phase logic."""
