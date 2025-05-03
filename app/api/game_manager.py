@@ -20,19 +20,13 @@ class GameManager:
         self.agent_pool.register_agent_class('greedy', GreedyAgent)
         
         # Load available maps
-        print("[DEBUG] Loading maps")
         self.maps = self._load_maps()
-        print("[DEBUG] Maps loaded")
         # Available agents and AI types
-        print("[DEBUG] Loading agents")
         self.available_agents = [
             "Jett", "Sage", "Phoenix", "Brimstone", "Viper",
             "Omen", "Sova", "Reyna", "Killjoy", "Cypher"
         ]
-        print("[DEBUG] Agents loaded")
-        print("[DEBUG] Loading AI types")
         self.available_ai_types = ["greedy"]  # Add more as implemented
-        print("[DEBUG] AI types loaded")
         
     def _load_maps(self) -> Dict[str, Map]:
         """Load all available maps."""
@@ -49,10 +43,8 @@ class GameManager:
     def create_match(self, team_a: dict, team_b: dict, map_name: str, 
                     agent_assignments: Optional[Dict[str, str]] = None) -> str:
         """Create a new match."""
-        print(f"[DEBUG] Creating match with map: {map_name}, team_a: {team_a}, team_b: {team_b}, agent_assignments: {agent_assignments}")
         
         if map_name not in self.maps:
-            print(f"[DEBUG] Map {map_name} not found in available maps: {list(self.maps.keys())}")
             raise ValueError(f"Map {map_name} not found")
 
         # Initialize agent_assignments if None
@@ -65,12 +57,8 @@ class GameManager:
         team_a_name = team_a['name'] if isinstance(team_a, dict) else team_a.name
         team_a_players_data = team_a['players'] if isinstance(team_a, dict) else team_a.players
         
-        print(f"[DEBUG] Creating players for team A, team_a_name: {team_a_name}, players count: {len(team_a_players_data)}")
-        
         for i, player_stats in enumerate(team_a_players_data):
             player_id = f"A{i+1}"
-            print(f"[DEBUG] Creating player {player_id} for team A with stats: {player_stats}")
-            
             # Handle player_stats whether it's a dict or an object
             if isinstance(player_stats, dict):
                 aim_rating = player_stats.get("aim_rating", 50)
@@ -107,11 +95,8 @@ class GameManager:
         team_b_name = team_b['name'] if isinstance(team_b, dict) else team_b.name
         team_b_players_data = team_b['players'] if isinstance(team_b, dict) else team_b.players
         
-        print(f"[DEBUG] Creating players for team B, team_b_name: {team_b_name}, players count: {len(team_b_players_data)}")
-        
         for i, player_stats in enumerate(team_b_players_data):
             player_id = f"B{i+1}"
-            print(f"[DEBUG] Creating player {player_id} for team B with stats: {player_stats}")
             
             # Handle player_stats whether it's a dict or an object
             if isinstance(player_stats, dict):
@@ -153,7 +138,6 @@ class GameManager:
         defender_ids = [p.id for p in team_b_players]
 
         # Create initial Round
-        print(f"[DEBUG] Creating round for map {map_name}")
         round_obj = Round(
             round_number=1,
             players=players,
@@ -163,7 +147,6 @@ class GameManager:
         )
 
         # Create Match
-        print(f"[DEBUG] Creating match for map {map_name}")
         match = Match(
             map=self.maps[map_name],
             round=round_obj,
@@ -172,10 +155,8 @@ class GameManager:
         )
 
         # Generate match ID and store match
-        print(f"[DEBUG] Generating match ID")
         match_id = str(uuid.uuid4())
         self.matches[match_id] = match
-        print(f"[DEBUG] Match created with ID {match_id}")
         return match_id
 
     def get_match_state(self, match_id: str) -> dict:
@@ -194,10 +175,7 @@ class GameManager:
     def simulate_next_round(self, match_id: str) -> dict:
         """Simulate the next round of the match."""
         try:
-            print(f"[DEBUG] Simulating next round for match {match_id}")
             match = self._get_match(match_id)
-            print(f"[DEBUG] Match found, current round: {match.current_round}")
-            print(f"[DEBUG] Match round object: {match.round}")
             
             # Get current round number
             current_round = match.current_round
@@ -208,12 +186,10 @@ class GameManager:
             # Simulate the round
             try:
                 round_result = match.round.simulate()
-                print(f"[DEBUG] Round simulated, result: {round_result}")
             
                 # Store the round result in match.round_results
                 round_summary = match.round.get_round_summary()
                 match.round_results[current_round] = round_summary
-                print(f"[DEBUG] Stored round result in match.round_results: {match.round_results}")
                 
                 # Update scores based on round winner
                 if round_result["winner"] == "attackers":
@@ -239,8 +215,6 @@ class GameManager:
             except Exception as e:
                 # If simulation fails, create a default round result
                 import traceback
-                print(f"[DEBUG] Error in round simulation: {str(e)}")
-                print(f"[DEBUG] Traceback: {traceback.format_exc()}")
                 
                 # Create a default round result
                 default_result = {
@@ -276,27 +250,19 @@ class GameManager:
             
         except Exception as e:
             import traceback
-            print(f"[DEBUG] Error simulating round: {str(e)}")
-            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
             raise e
 
     def get_round_state(self, match_id: str, round_number: int) -> dict:
         """Get the state of a specific round."""
         try:
-            print(f"[DEBUG] Getting round state for match {match_id}, round {round_number}")
             match = self._get_match(match_id)
-            print(f"[DEBUG] Match found, current round: {match.current_round}")
-            print(f"[DEBUG] Round results: {match.round_results}")
             
             if round_number > match.current_round:
-                print(f"[DEBUG] Round {round_number} has not been played yet")
                 raise KeyError(f"Round {round_number} has not been played yet")
             
             round_state = match.round_results.get(round_number)
-            print(f"[DEBUG] Round state for round {round_number}: {round_state}")
             
             if not round_state:
-                print(f"[DEBUG] Round {round_number} not found in round_results")
                 raise KeyError(f"Round {round_number} not found")
             
             # Ensure round_state has the required structure
@@ -327,8 +293,6 @@ class GameManager:
             }
         except Exception as e:
             import traceback
-            print(f"[DEBUG] Error getting round state: {str(e)}")
-            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
             raise e
 
     def assign_agent(self, match_id: str, player_id: str, agent_name: str) -> dict:
@@ -386,11 +350,8 @@ class GameManager:
     def get_match_stats(self, match_id: str) -> dict:
         """Get match statistics."""
         try:
-            print(f"[DEBUG] Getting match stats for match {match_id}")
             match = self._get_match(match_id)
-            print(f"[DEBUG] Match found, getting detailed stats")
             stats = match.get_detailed_match_stats()
-            print(f"[DEBUG] Got stats: {stats}")
             
             # Format the round results as a list of dictionaries
             rounds_list = []
@@ -458,12 +419,9 @@ class GameManager:
                 "team_stats": team_stats
             }
             
-            print(f"[DEBUG] Formatted response with all required fields: {response}")
             return response
         except Exception as e:
             import traceback
-            print(f"[DEBUG] Error getting match stats: {str(e)}")
-            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
             raise e
 
     def _get_match(self, match_id: str) -> Match:

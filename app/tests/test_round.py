@@ -210,20 +210,16 @@ def test_buying_shields_assigns_correct_shield():
     attacker_ids = [player.id]
     defender_ids = [defender.id]
     
-    print(f"[DEBUG-TEST] Player initial state: id={player.id}, creds={player.creds}, shield={player.shield}")
     
     # Create a Map object with spawn points
     map_obj = Map(name="Test Map", width=32, height=32)
     map_obj.attacker_spawns = [(0.0, 0.0, 0.0)]
     map_obj.defender_spawns = [(1.0, 0.0, 0.0)]
     
-    print(f"[DEBUG-TEST] Creating round object")
     round_obj = make_round(players, attacker_ids, defender_ids, map_obj=map_obj)
     
     # Simulate end of buy phase - direct call to ensure it works
-    print(f"[DEBUG-TEST] Direct call to _simulate_buy_decision")
     round_obj._simulate_buy_decision(player)
-    print(f"[DEBUG-TEST] After direct call: shield={player.shield}")
     
     assert player.shield == "heavy"
      
